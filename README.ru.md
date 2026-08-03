@@ -1,4 +1,4 @@
-# Codex Bridge
+# Claude Codex Bridge
 
 **Русский** · [English](README.md)
 
@@ -14,13 +14,13 @@
 
 У двух моделей разные слепые пятна. Решение, которое одна считает очевидным, вторая нередко разносит в пух и прах — и часто по делу. Но чтобы этим пользоваться, обычно приходится вручную гонять текст между двумя окнами, теряя контекст на каждом переносе.
 
-Codex Bridge убирает этот перенос. Claude, наткнувшись на спорное архитектурное решение, сам спросит мнение GPT — без вашей команды. GPT, разбираясь в незнакомом коде, сам обратится к Claude. Вы видите обе позиции и точку расхождения.
+Claude Codex Bridge убирает этот перенос. Claude, наткнувшись на спорное архитектурное решение, сам спросит мнение GPT — без вашей команды. GPT, разбираясь в незнакомом коде, сам обратится к Claude. Вы видите обе позиции и точку расхождения.
 
 ```
                        ┌──────────────┐
-   /codex:ask          │              │        claude_ask
-   /codex:review   ───►│    Codex     │◄───    claude_critique
-   /codex:delegate     │    Bridge    │        claude_task
+   /codex-bridge:ask          │              │        claude_ask
+   /codex-bridge:review   ───►│    Codex     │◄───    claude_critique
+   /codex-bridge:delegate     │    Bridge    │        claude_task
    Claude Code     ◄───│              │───►    Codex CLI
    результаты          └──────────────┘        проброшенные MCP
 ```
@@ -41,33 +41,33 @@ Codex Bridge убирает этот перенос. Claude, наткнувши�
 Опишите баг — GPT сам разберётся в причине, внесёт минимальную правку и запустит тесты. Работает в фоне: запустили и продолжаете свою работу.
 
 ```
-/codex:delegate тесты auth_spec начали падать после мержа main, разберись
-/codex:status      # идёт?
-/codex:result      # что получилось
-/codex:cancel      # передумал
+/codex-bridge:delegate тесты auth_spec начали падать после мержа main, разберись
+/codex-bridge:status      # идёт?
+/codex-bridge:result      # что получилось
+/codex-bridge:cancel      # передумал
 ```
 
 ### Совместная работа двух моделей
 
 ```
-/codex:ask     стоит ли выносить этот кеш в Redis или хватит in-memory
-/codex:debate  схема ретраев для платёжного вебхука
+/codex-bridge:ask     стоит ли выносить этот кеш в Redis или хватит in-memory
+/codex-bridge:debate  схема ретраев для платёжного вебхука
 ```
 
-`/codex:debate` проводит структурированный спор в несколько кругов: Claude формулирует позицию, GPT её оспаривает, Claude отвечает на сильнейшее возражение. В конце — что признали обе стороны, где остались разногласия и какой эксперимент их разрешит. Согласие не изображается: два расходящихся мнения полезнее одного усреднённого.
+`/codex-bridge:debate` проводит структурированный спор в несколько кругов: Claude формулирует позицию, GPT её оспаривает, Claude отвечает на сильнейшее возражение. В конце — что признали обе стороны, где остались разногласия и какой эксперимент их разрешит. Согласие не изображается: два расходящихся мнения полезнее одного усреднённого.
 
 ### Генерация изображений
 
 ```
-/codex:image --ar 16:9 --res 2K баннер для лендинга, тёмный фон, изометрия
-/codex:image --ref designs/palette.png иконка настроек в стиле референса
+/codex-bridge:image --ar 16:9 --res 2K баннер для лендинга, тёмный фон, изометрия
+/codex-bridge:image --ref designs/palette.png иконка настроек в стиле референса
 ```
 
 Рисует gpt-image-2 через встроенный инструмент Codex — на вашей подписке ChatGPT, без API-ключа. После генерации Claude **открывает картинку и смотрит на неё**: сверяет с выписанными заранее критериями и при расхождении правит промпт и генерирует заново. Ответ «успешно» от модели ничего не говорит о том, что нарисовано.
 
 ### Двусторонний мост
 
-После `/codex:setup --link-back` у GPT появляются свои инструменты:
+После `/codex-bridge:setup --link-back` у GPT появляются свои инструменты:
 
 - **`claude_ask`, `claude_critique`** — спросить мнение Claude, попросить раскритиковать план до его применения
 - **`claude_task`** — поручить задачу Claude Code со всеми его инструментами
@@ -91,8 +91,8 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 Дальше в сессии Claude Code:
 
 ```
-/plugin marketplace add VlDubr/codex-bridge
-/plugin install codex-bridge@codex-tools
+/plugin marketplace add VlDubr/claude-codex-bridge
+/plugin install codex-bridge@claude-codex-bridge
 /reload-plugins
 /plugin enable codex-bridge
 ```
@@ -100,7 +100,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 Проверить, что всё на месте:
 
 ```
-/codex:setup
+/codex-bridge:setup
 ```
 
 Команда покажет версию Codex, состояние авторизации, доступные модели и каталог для изображений. Если чего-то не хватает — скажет, чего именно.
@@ -113,7 +113,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 
 | Параметр | Что задаёт |
 |---|---|
-| `default_model` | Модель Codex по умолчанию. Список — `/codex:models` |
+| `default_model` | Модель Codex по умолчанию. Список — `/codex-bridge:models` |
 | `default_effort` | Уровень reasoning: `minimal`, `low`, `medium`, `high` |
 | `job_timeout_minutes` | Через сколько убивать зависшую фоновую задачу (по умолчанию 30) |
 | `image_output_dir` | Куда складывать изображения (по умолчанию `assets/generated`) |
@@ -124,15 +124,15 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 По умолчанию выключен. Включается одной командой:
 
 ```
-/codex:setup --link-back
+/codex-bridge:setup --link-back
 ```
 
-Она добавляет MCP-сервер в `~/.codex/config.toml`. После перезапуска Codex у GPT появляются `claude_ask` и `claude_critique`. Отключить: `/codex:setup --unlink-back`.
+Она добавляет MCP-сервер в `~/.codex/config.toml`. После перезапуска Codex у GPT появляются `claude_ask` и `claude_critique`. Отключить: `/codex-bridge:setup --unlink-back`.
 
 Делегирование в обратную сторону включается отдельно, с явным потолком инструментов:
 
 ```
-/codex:setup --allow-task --task-tools Read,Grep,Glob
+/codex-bridge:setup --allow-task --task-tools Read,Grep,Glob
 ```
 
 ### Проброс MCP-инструментов
@@ -140,9 +140,9 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 Посмотреть, что подключено к Claude, и пробросить нужное:
 
 ```
-/codex:setup --expose-list
-/codex:setup --expose tracker --tools list_issues,create_issue
-/codex:setup --unexpose tracker
+/codex-bridge:setup --expose-list
+/codex-bridge:setup --expose tracker --tools list_issues,create_issue
+/codex-bridge:setup --unexpose tracker
 ```
 
 Пробрасывается только явно перечисленное. Инструмент, не попавший в `--tools`, для GPT просто не существует.
@@ -153,24 +153,24 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 
 | Команда | Что делает |
 |---|---|
-| `/codex:review [--base main] [--now]` | Ревью текущих изменений |
-| `/codex:challenge <что оспорить>` | Состязательное ревью: оспаривает дизайн |
-| `/codex:delegate <задача>` | GPT исследует и чинит сам, с правом менять файлы |
-| `/codex:status [id]` | Статус фоновых задач |
-| `/codex:result [id]` | Результат завершённой задачи |
-| `/codex:cancel [id]` | Отмена выполняющейся задачи |
-| `/codex:ask <вопрос>` | Второе мнение от GPT прямо сейчас |
-| `/codex:debate <тема>` | Спор Claude ↔ GPT в несколько кругов |
-| `/codex:image <описание>` | Изображение gpt-image-2 с проверкой результата |
-| `/codex:models [--refresh]` | Модели, реально доступные в этом Codex |
-| `/codex:setup [флаги]` | Диагностика, обратный мост, проброс инструментов |
+| `/codex-bridge:review [--base main] [--now]` | Ревью текущих изменений |
+| `/codex-bridge:challenge <что оспорить>` | Состязательное ревью: оспаривает дизайн |
+| `/codex-bridge:delegate <задача>` | GPT исследует и чинит сам, с правом менять файлы |
+| `/codex-bridge:status [id]` | Статус фоновых задач |
+| `/codex-bridge:result [id]` | Результат завершённой задачи |
+| `/codex-bridge:cancel [id]` | Отмена выполняющейся задачи |
+| `/codex-bridge:ask <вопрос>` | Второе мнение от GPT прямо сейчас |
+| `/codex-bridge:debate <тема>` | Спор Claude ↔ GPT в несколько кругов |
+| `/codex-bridge:image <описание>` | Изображение gpt-image-2 с проверкой результата |
+| `/codex-bridge:models [--refresh]` | Модели, реально доступные в этом Codex |
+| `/codex-bridge:setup [флаги]` | Диагностика, обратный мост, проброс инструментов |
 
 Слэш-команды — не единственный вход. Claude вызывает те же возможности сам, когда они уместны по контексту. Есть и субагенты: `@codex-bridge:gpt-advisor` для второго мнения, `@codex-bridge:gpt-delegate` для передачи работы, `@codex-bridge:image-smith` для длинного цикла генерации с проверкой.
 
 ## Модели
 
 ```
-/codex:models
+/codex-bridge:models
 ```
 
 Список не зашит в плагин, а запрашивается у самого Codex — модели снимаются с обслуживания, и зашитые списки устаревают молча. Опечатка в имени отклоняется сразу, со списком доступных вариантов.
@@ -193,7 +193,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 
 Расход идёт по лимитам **подписки ChatGPT**, отдельно от подписки Claude. Никаких API-ключей и оплаты по токенам. Генерация изображений тоже укладывается в подписку.
 
-Учтите: `/codex:image` занимает 4–6 минут — Codex сначала рассуждает и только потом вызывает инструмент. При 4K дольше. Это нормально, а не зависание.
+Учтите: `/codex-bridge:image` занимает 4–6 минут — Codex сначала рассуждает и только потом вызывает инструмент. При 4K дольше. Это нормально, а не зависание.
 
 ## Ограничения
 
@@ -211,7 +211,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 node tests/regressions.mjs   # 27 тестов, реальные codex/claude не нужны
 ```
 
-Запуск без установки: `claude --plugin-dir /путь/к/codex-bridge`
+Запуск без установки: `claude --plugin-dir /путь/к/claude-codex-bridge`
 
 ## Лицензия
 

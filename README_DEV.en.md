@@ -1,4 +1,4 @@
-# Codex Bridge — development guide
+# Claude Codex Bridge — development guide
 
 [Русский](README_DEV.md) · **English**
 
@@ -23,7 +23,7 @@ No external dependencies. Both MCP servers and the MCP client implement JSON-RPC
 ## Layout
 
 ```
-codex-bridge/
+claude-codex-bridge/
 ├── .claude-plugin/
 │   ├── plugin.json          manifest, userConfig, defaultEnabled: false
 │   └── marketplace.json     single-plugin catalog, source: "."
@@ -47,6 +47,20 @@ codex-bridge/
 │   └── tool-proxy.mjs       allowlist, server discovery, re-export
 └── tests/regressions.mjs    27 regression tests
 ```
+
+---
+
+### Three different names
+
+They're easy to confuse, and they do different things:
+
+| What | Value | What it affects |
+|---|---|---|
+| Repository | `claude-codex-bridge` | `/plugin marketplace add VlDubr/claude-codex-bridge` |
+| Marketplace (`marketplace.json` → `name`) | `claude-codex-bridge` | the right-hand side of `codex-bridge@claude-codex-bridge` |
+| Plugin (`plugin.json` → `name`) | `codex-bridge` | **the slash command and subagent prefix**: `/codex-bridge:review`, `@codex-bridge:gpt-advisor` |
+
+The prefix is never optional: even when a command's name matches the plugin's, the invocation is still `/plugin:command`. So the plugin name stays short — it appears in every single command. Renaming `plugin.json` → `name` changes every command at once and breaks users' muscle memory, so only do it alongside a major version bump.
 
 ---
 
@@ -185,9 +199,9 @@ If other plugins appear, move this one to `plugins/codex-bridge/` and change `so
 ## Debugging
 
 ```bash
-claude --plugin-dir /path/to/codex-bridge   # run without installing
+claude --plugin-dir /path/to/claude-codex-bridge   # run without installing
 claude --debug                              # plugin loading, MCP init
-/codex:setup                                # environment diagnostics
+/codex-bridge:setup                                # environment diagnostics
 ```
 
 You can talk to an MCP server directly:
@@ -214,7 +228,7 @@ An honest list of what has never been checked against live binaries:
 3. **The exact `codex exec` flag set** is detected from `--help`; parsing help text with regexes is itself an assumption.
 4. **The behaviour of `claude -p --tools`** was verified from documentation, not against a real binary.
 
-A first run in a real environment should proceed in order of increasing risk: `/codex:setup` → `/codex:models` → `/codex:review` → `/codex:delegate` → `/codex:image`.
+A first run in a real environment should proceed in order of increasing risk: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
 
 ## Contributing
 

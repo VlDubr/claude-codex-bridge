@@ -1,4 +1,4 @@
-# Codex Bridge — документация для разработки
+# Claude Codex Bridge — документация для разработки
 
 **Русский** · [English](README_DEV.en.md)
 
@@ -23,7 +23,7 @@
 ## Структура
 
 ```
-codex-bridge/
+claude-codex-bridge/
 ├── .claude-plugin/
 │   ├── plugin.json          манифест, userConfig, defaultEnabled: false
 │   └── marketplace.json     каталог из одного плагина, source: "."
@@ -47,6 +47,20 @@ codex-bridge/
 │   └── tool-proxy.mjs       allowlist, обнаружение серверов, переэкспорт
 └── tests/regressions.mjs    27 регрессионных тестов
 ```
+
+---
+
+### Три разных имени
+
+Их легко перепутать, а последствия разные:
+
+| Что | Значение | На что влияет |
+|---|---|---|
+| Репозиторий | `claude-codex-bridge` | `/plugin marketplace add VlDubr/claude-codex-bridge` |
+| Маркетплейс (`marketplace.json` → `name`) | `claude-codex-bridge` | правая часть в `codex-bridge@claude-codex-bridge` |
+| Плагин (`plugin.json` → `name`) | `codex-bridge` | **префикс слэш-команд и субагентов**: `/codex-bridge:review`, `@codex-bridge:gpt-advisor` |
+
+Префикс никогда не опускается: даже если имя команды совпадает с именем плагина, вызов всё равно будет `/plugin:command`. Поэтому имя плагина держим коротким — оно попадает в каждую команду. Переименование `plugin.json` → `name` меняет все команды разом и ломает мышечную память пользователей, так что делать это стоит только с бампом мажорной версии.
 
 ---
 
@@ -185,9 +199,9 @@ claude plugin validate . --strict
 ## Отладка
 
 ```bash
-claude --plugin-dir /путь/к/codex-bridge   # запуск без установки
+claude --plugin-dir /путь/к/claude-codex-bridge   # запуск без установки
 claude --debug                             # загрузка плагина, инициализация MCP
-/codex:setup                               # диагностика окружения
+/codex-bridge:setup                               # диагностика окружения
 ```
 
 MCP-сервер можно позвать напрямую:
@@ -214,7 +228,7 @@ printf '%s\n' \
 3. **Точный набор флагов `codex exec`** определяется по `--help`; парсинг help-текста регулярками сам по себе допущение.
 4. **Поведение `claude -p --tools`** проверено по документации, не на реальном бинаре.
 
-Первый прогон на настоящем окружении должен идти по возрастанию риска: `/codex:setup` → `/codex:models` → `/codex:review` → `/codex:delegate` → `/codex:image`.
+Первый прогон на настоящем окружении должен идти по возрастанию риска: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
 
 ## Вклад
 
