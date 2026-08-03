@@ -1,0 +1,16 @@
+{
+  "name": "codex-tools",
+  "owner": {
+    "name": "ЗАМЕНИТЕ: ваше имя",
+    "url": "https://github.com/ЗАМЕНИТЕ"
+  },
+  "plugins": [
+    {
+      "name": "codex-bridge",
+      "source": ".",
+      "description": "Двусторонний мост Claude Code ↔ Codex (ChatGPT): ревью, делегирование, генерация изображений",
+      "category": "development",
+      "keywords": ["codex", "chatgpt", "multi-model", "image-generation"]
+    }
+  ]
+}

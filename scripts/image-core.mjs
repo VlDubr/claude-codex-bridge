@@ -67,6 +67,57 @@ function slug(s, max = 40) {
   );
 }
 
+// ------------------------------------------------------- проверки результата
+
+const MAGIC = [
+  { ext: ".png", bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { ext: ".jpg", bytes: [0xff, 0xd8, 0xff] },
+  { ext: ".gif", bytes: [0x47, 0x49, 0x46, 0x38] },
+];
+
+/** Формат определяется по сигнатуре, а не по расширению и не по словам Codex. */
+export function sniffImage(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(16);
+    const read = fs.readSync(fd, buf, 0, 16, 0);
+    if (read < 12) return null;
+    for (const m of MAGIC) {
+      if (m.bytes.every((b, i) => buf[i] === b)) return m.ext;
+    }
+    // WebP: RIFF....WEBP
+    if (buf.slice(0, 4).toString("latin1") === "RIFF" && buf.slice(8, 12).toString("latin1") === "WEBP") {
+      return ".webp";
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+/** Путь обязан остаться внутри корня: out_dir приходит от модели. */
+export function resolveInside(root, candidate, what) {
+  const rootAbs = path.resolve(root);
+  if (path.isAbsolute(candidate)) {
+    throw new Error(`${what}: абсолютные пути запрещены (${candidate}).`);
+  }
+  const abs = path.resolve(rootAbs, candidate);
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
+    throw new Error(`${what}: путь выходит за пределы проекта (${candidate}).`);
+  }
+  return abs;
+}
+
+/** Разрешено забирать файл только из проекта или из каталога Codex. */
+function acceptableSource(file, cwd) {
+  const abs = path.resolve(file);
+  const roots = [path.resolve(cwd), path.resolve(codexGenDir())];
+  return roots.some((r) => abs === r || abs.startsWith(r + path.sep));
+}
+
 // -------------------------------------------------------------------- промпт
 
 function buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs }) {
@@ -109,7 +160,7 @@ function resolveRefs(refs, cwd) {
         `Референс "${s}" — URL. Встроенный инструмент принимает локальные файлы: скачай изображение в проект и передай путь.`
       );
     }
-    const abs = path.isAbsolute(s) ? s : path.join(cwd, s);
+    const abs = resolveInside(cwd, s, `референс "${s}"`);
     if (!fs.existsSync(abs)) throw new Error(`Референс не найден: ${s}`);
     return abs;
   });
@@ -124,6 +175,7 @@ function rescueGenerated(sinceMs) {
       const p = path.join(dir, f);
       const st = fs.statSync(p);
       if (!st.isFile() || st.mtimeMs < sinceMs) continue;
+      if (!sniffImage(p)) continue; // не изображение — не наш артефакт
       if (!best || st.mtimeMs > best.mtimeMs) best = { path: p, mtimeMs: st.mtimeMs };
     }
   } catch {}
@@ -153,9 +205,12 @@ export function generateImage(opts) {
     return { ok: false, error: String(e.message || e) };
   }
 
-  const dir = path.isAbsolute(out_dir || "")
-    ? out_dir
-    : path.join(cwd, out_dir || process.env.CODEX_BRIDGE_IMAGE_DIR || "assets/generated");
+  let dir;
+  try {
+    dir = resolveInside(cwd, out_dir || process.env.CODEX_BRIDGE_IMAGE_DIR || "assets/generated", "out_dir");
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
   fs.mkdirSync(dir, { recursive: true });
 
   const file = `${slug(name || prompt)}-${crypto.randomBytes(3).toString("hex")}.png`;
@@ -194,26 +249,65 @@ export function generateImage(opts) {
   if (r.error) return { ok: false, error: String(r.error.message || r.error) };
 
   const out = (r.stdout || "").trim();
+  const errText = (r.stderr || "").trim();
+  const tailOf = (t) => t.split("\n").slice(-15).join("\n");
+
+  // Код возврата проверяем ДО поиска файлов: иначе подберём чужой артефакт
+  // и выдадим провалившийся запуск за успех.
+  if (r.status !== 0) {
+    return {
+      ok: false,
+      error:
+        `Codex завершился с кодом ${r.status}.` +
+        (errText ? `\n${errText.slice(0, 500)}` : "") +
+        `\n\nПоследние строки вывода:\n${tailOf(out)}`,
+    };
+  }
+
+  const accept = (file, note) => {
+    const ext = sniffImage(file);
+    if (!ext) {
+      return {
+        ok: false,
+        error:
+          `Файл ${file} не является изображением (не распознана сигнатура PNG/JPEG/GIF/WebP). ` +
+          `Codex мог сохранить отчёт или лог вместо картинки. Файл не принят.`,
+      };
+    }
+    const finalPath = file.startsWith(dir + path.sep)
+      ? file
+      : path.join(dir, path.basename(target, ".png") + ext);
+    if (finalPath !== file) fs.copyFileSync(file, finalPath);
+    // Расширение приводим к реальному формату
+    const wanted = finalPath.replace(/\.[^.]+$/, ext);
+    if (wanted !== finalPath) {
+      fs.renameSync(finalPath, wanted);
+      return { ok: true, path: wanted, bytes: fs.statSync(wanted).size, moved: note, transcript: out };
+    }
+    return { ok: true, path: finalPath, bytes: fs.statSync(finalPath).size, moved: note, transcript: out };
+  };
 
   // 1. Файл на месте — обычный случай.
-  if (fs.existsSync(target)) {
-    return { ok: true, path: target, bytes: fs.statSync(target).size, transcript: out };
-  }
+  if (fs.existsSync(target)) return accept(target, null);
 
-  // 2. Codex сохранил куда-то ещё, но сказал куда.
+  // 2. Codex сохранил в другое место и назвал его. Принимаем путь только если
+  //    он внутри проекта или каталога генерации Codex.
   const declared = /^SAVED:\s*(.+)$/m.exec(out)?.[1]?.trim();
   if (declared && fs.existsSync(declared)) {
-    fs.copyFileSync(declared, target);
-    return { ok: true, path: target, bytes: fs.statSync(target).size, moved: declared, transcript: out };
+    if (!acceptableSource(declared, cwd)) {
+      return {
+        ok: false,
+        error:
+          `Codex сообщил путь ${declared}, который находится вне проекта и вне ${codexGenDir()}. ` +
+          `Копирование отклонено.`,
+      };
+    }
+    return accept(declared, declared);
   }
 
-  // 3. Забираем свежий файл из каталога Codex.
+  // 3. Свежий файл в каталоге Codex — но только настоящее изображение.
   const rescued = rescueGenerated(startedAt);
-  if (rescued) {
-    fs.copyFileSync(rescued, path.join(dir, path.basename(rescued)));
-    const finalPath = path.join(dir, path.basename(rescued));
-    return { ok: true, path: finalPath, bytes: fs.statSync(finalPath).size, moved: rescued, transcript: out };
-  }
+  if (rescued) return accept(rescued, rescued);
 
   const failed = /^FAILED:\s*(.+)$/m.exec(out)?.[1]?.trim();
   const suspectScript = /OPENAI_API_KEY|api\.openai\.com|images\/generations/i.test(out);
@@ -224,6 +318,6 @@ export function generateImage(opts) {
       (suspectScript
         ? "\nПохоже, Codex попытался обратиться к платному Images API вместо встроенного инструмента. Повтори запрос."
         : "") +
-      `\n\nПоследние строки вывода Codex:\n${out.split("\n").slice(-15).join("\n")}`,
+      `\n\nПоследние строки вывода Codex:\n${tailOf(out)}`,
   };
 }

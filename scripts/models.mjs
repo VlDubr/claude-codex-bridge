@@ -59,10 +59,12 @@ function readCache() {
   return null;
 }
 
-function writeCache(models, source) {
+function writeCache(models, source, complete) {
   try {
-    fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
-    fs.writeFileSync(cachePath(), JSON.stringify({ at: Date.now(), source, models }, null, 2));
+    fs.mkdirSync(path.dirname(cachePath()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(cachePath(), JSON.stringify({ at: Date.now(), source, complete, models }, null, 2), {
+      mode: 0o600,
+    });
   } catch {}
 }
 
@@ -70,7 +72,7 @@ function writeCache(models, source) {
 export function fetchModels({ force = false } = {}) {
   if (!force) {
     const c = readCache();
-    if (c) return { ok: true, models: c.models, source: c.source, cached: true };
+    if (c) return { ok: true, models: c.models, source: c.source, complete: c.complete !== false, cached: true };
   }
 
   const r = spawnSync(codexBinary(), ["debug", "models"], {
@@ -86,23 +88,31 @@ export function fetchModels({ force = false } = {}) {
   const raw = (r.stdout || "").trim();
   if (raw) {
     // Каталог может быть окружён служебным текстом — берём первый JSON-блок.
+    // Каталог может быть окружён служебными строками с обеих сторон, поэтому
+    // пробуем сузить срез справа, а не только слева.
     const start = raw.search(/[[{]/);
     if (start >= 0) {
-      try {
-        const models = parseCatalog(JSON.parse(raw.slice(start)));
-        if (models.length) {
-          writeCache(models, "codex debug models");
-          return { ok: true, models, source: "codex debug models" };
-        }
-      } catch {}
+      const tail = raw.slice(start);
+      for (let end = tail.length; end > 1; end = tail.lastIndexOf("}", end - 1) + 1 || tail.lastIndexOf("]", end - 1) + 1) {
+        try {
+          const models = parseCatalog(JSON.parse(tail.slice(0, end)));
+          if (models.length) {
+            writeCache(models, "codex debug models", true);
+            return { ok: true, models, source: "codex debug models", complete: true };
+          }
+        } catch {}
+        if (end <= 1) break;
+      }
     }
   }
 
   // Запасной путь: каталог, объявленный пользователем в config.toml.
   const fromConfig = modelsFromConfig();
   if (fromConfig.length) {
-    writeCache(fromConfig, "config.toml");
-    return { ok: true, models: fromConfig, source: "config.toml", degraded: true };
+    writeCache(fromConfig, "config.toml", false);
+    // complete: false — это не каталог, а лишь то, что пользователь прописал
+    // сам. Блокировать по нему чужие имена моделей нельзя.
+    return { ok: true, models: fromConfig, source: "config.toml", complete: false, degraded: true };
   }
 
   const stale = (() => {
@@ -113,7 +123,13 @@ export function fetchModels({ force = false } = {}) {
     }
   })();
   if (stale?.models?.length) {
-    return { ok: true, models: stale.models, source: `${stale.source} (устаревший кэш)`, degraded: true };
+    return {
+      ok: true,
+      models: stale.models,
+      source: `${stale.source} (устаревший кэш)`,
+      complete: stale.complete !== false,
+      degraded: true,
+    };
   }
 
   return {
@@ -154,6 +170,9 @@ export function knownModel(id) {
   if (!r.ok) return { known: true, unverified: true };
   const hit = r.models.find((m) => m.id === id);
   if (hit) return { known: true, model: hit };
+  // Каталог неполный (получен обходным путём) — запрещать по нему нельзя:
+  // отклонили бы вполне рабочую модель. Пропускаем с пометкой.
+  if (r.complete === false) return { known: true, unverified: true, source: r.source };
   return { known: false, available: r.models.map((m) => m.id) };
 }
 
@@ -169,7 +188,9 @@ export function formatModels(r) {
   return [
     `Модели Codex (источник: ${r.source}${r.cached ? ", из кэша" : ""}):`,
     ...lines,
-    r.degraded ? "\nВнимание: список получен обходным путём и может быть неполным." : "",
+    r.complete === false
+      ? "\nВнимание: каталог неполный (получен обходным путём). Имена моделей не проверяются на существование."
+      : "",
   ]
     .filter(Boolean)
     .join("\n");

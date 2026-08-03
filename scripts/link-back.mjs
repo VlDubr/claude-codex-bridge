@@ -1,0 +1,134 @@
+// link-back.mjs — регистрация обратного моста в ~/.codex/config.toml.
+//
+// Файл принадлежит пользователю, поэтому все правки: только внутри
+// маркированного блока, с атомарной записью и проверкой на конфликт с
+// существующей неуправляемой таблицей [mcp_servers.claude-bridge].
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const CONFIG_PATH =
+  process.env.CODEX_BRIDGE_CONFIG || path.join(os.homedir(), ".codex", "config.toml");
+
+const MARK_START = "# >>> codex-bridge (claude) >>>";
+const MARK_END = "# <<< codex-bridge (claude) <<<";
+const SERVER_TABLE = "mcp_servers.claude-bridge";
+
+const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Глобальная: блоков может оказаться несколько, если старая версия их наплодила.
+const blockRe = () => new RegExp(`\\n?${esc(MARK_START)}[\\s\\S]*?${esc(MARK_END)}\\n?`, "g");
+
+export function pluginRoot() {
+  return process.env.CLAUDE_PLUGIN_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+export function bridgePath(root = pluginRoot()) {
+  return path.join(root, "bridge", "mcp-claude.mjs");
+}
+
+/** Строка TOML: экранируем и кавычку, и обратный слеш, и управляющие символы. */
+function tomlString(s) {
+  const escaped = String(s)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+  return `"${escaped}"`;
+}
+
+function block(bridge) {
+  return `${MARK_START}
+# Управляется плагином codex-bridge. Путь обновляется автоматически при
+# обновлении плагина — правки внутри блока будут перезаписаны.
+[${SERVER_TABLE}]
+command = "node"
+args = [${tomlString(bridge)}]
+${MARK_END}`;
+}
+
+function read() {
+  try {
+    return fs.readFileSync(CONFIG_PATH, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function stripBlocks(text) {
+  return text.replace(blockRe(), "\n");
+}
+
+/** Есть ли объявление нашей таблицы ВНЕ управляемого блока. */
+function foreignTable(text) {
+  const outside = stripBlocks(text);
+  return new RegExp(`^\\s*\\[${esc(SERVER_TABLE)}\\]`, "m").test(outside);
+}
+
+function writeAtomic(content) {
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  const tmp = `${CONFIG_PATH}.codex-bridge.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, CONFIG_PATH);
+}
+
+export function isLinked() {
+  const cur = read();
+  return Boolean(cur && blockRe().test(cur));
+}
+
+export function linkedPath() {
+  const cur = read();
+  if (!cur) return null;
+  const m = new RegExp(`${esc(MARK_START)}[\\s\\S]*?${esc(MARK_END)}`, "m").exec(cur);
+  if (!m) return null;
+  const raw = /args\s*=\s*\[\s*"((?:[^"\\]|\\.)*)"/.exec(m[0])?.[1];
+  if (raw === undefined) return null;
+  return raw.replace(/\\(["\\nrt])/g, (_, c) => ({ n: "\n", r: "\r", t: "\t" })[c] || c);
+}
+
+export function link(root = pluginRoot()) {
+  const bridge = bridgePath(root);
+  const cur = read() || "";
+
+  if (foreignTable(cur)) {
+    return {
+      action: "conflict",
+      error:
+        `В ${CONFIG_PATH} уже есть таблица [${SERVER_TABLE}], объявленная не этим плагином. ` +
+        `Добавление второй сделало бы файл невалидным TOML. Удалите или переименуйте существующую таблицу и повторите.`,
+    };
+  }
+
+  const had = blockRe().test(cur);
+  // Удаляем ВСЕ управляемые блоки (их могло остаться несколько), затем дописываем один.
+  const base = stripBlocks(cur).replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+  const sep = base && !base.endsWith("\n") ? "\n\n" : base ? "\n" : "";
+  writeAtomic(base + sep + block(bridge) + "\n");
+  return { action: had ? "updated" : "added", bridge };
+}
+
+export function unlink() {
+  const cur = read();
+  if (cur === null) return { action: "no-config" };
+  if (!blockRe().test(cur)) return { action: "not-found" };
+  writeAtomic(stripBlocks(cur).replace(/\n{3,}/g, "\n\n"));
+  return { action: "removed" };
+}
+
+/**
+ * ${CLAUDE_PLUGIN_ROOT} меняется при каждом обновлении плагина, а каталог
+ * старой версии удаляется примерно через две недели. Поэтому путь сверяется
+ * на каждом старте сессии.
+ */
+export function ensureFresh(root = pluginRoot()) {
+  if (!isLinked()) return null;
+  const want = bridgePath(root);
+  const have = linkedPath();
+  if (have === want) return null;
+  if (!fs.existsSync(want)) return null;
+  const r = link(root);
+  return r.action === "conflict" ? null : { from: have, to: want };
+}

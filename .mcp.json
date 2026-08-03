@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "codex": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-codex.mjs"
+      ],
+      "env": {
+        "CODEX_BRIDGE_MODEL": "${user_config.default_model}",
+        "CODEX_BRIDGE_EFFORT": "${user_config.default_effort}",
+        "CODEX_BRIDGE_JOB_TIMEOUT_MIN": "${user_config.job_timeout_minutes}",
+        "CLAUDE_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}"
+      }
+    },
+    "image": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-image.mjs"
+      ],
+      "env": {
+        "CODEX_BRIDGE_IMAGE_DIR": "${user_config.image_output_dir}",
+        "CODEX_BRIDGE_IMAGE_TIMEOUT_MS": "${user_config.image_timeout_minutes}",
+        "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
+        "CLAUDE_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}"
+      }
+    }
+  }
+}
