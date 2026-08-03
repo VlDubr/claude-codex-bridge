@@ -3,7 +3,7 @@
 
 import path from "node:path";
 import { serve, text, fail } from "./mcp-lib.mjs";
-import { checkCodex } from "./codex-core.mjs";
+import { checkCodex, envClean } from "./codex-core.mjs";
 import {
   generateImage,
   validate,
@@ -61,7 +61,7 @@ const TOOLS = [
   },
 ];
 
-const root = () => process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const root = () => envClean("CLAUDE_PROJECT_DIR") || process.cwd();
 
 async function handle(name, args) {
   if (name === "image_check_params") {

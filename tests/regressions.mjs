@@ -429,6 +429,203 @@ await t("9b. каталог, окружённый служебным текст�
   delete process.env.FAKE_MODELS;
 });
 
+// ───────────────────────────────── 9c/9d. Уровни усилий (найдено на живом Codex)
+
+await t("9c. effort сверяется с supported_reasoning_efforts модели", async () => {
+  const d = fresh("efforts");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE_MODELS = JSON.stringify({
+    models: [
+      { id: "gpt-5.6-sol", display_name: "Sol", supported_reasoning_efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
+      { id: "old-model", display_name: "Old", supported_reasoning_efforts: ["minimal", "low"] },
+    ],
+  });
+  const m = await import(`${ROOT}/scripts/models.mjs?eff=${Date.now()}`);
+  m.fetchModels({ force: true });
+
+  // minimal реально отвергается gpt-5.6-sol — это и сломалось на живом запуске
+  assert.ok(m.validateEffort("gpt-5.6-sol", "minimal"), "minimal пропущен для модели, которая его не принимает");
+  assert.equal(m.validateEffort("gpt-5.6-sol", "low"), null, "low отклонён");
+  assert.equal(m.validateEffort("gpt-5.6-sol", "xhigh"), null, "xhigh отклонён");
+  assert.equal(m.validateEffort("old-model", "minimal"), null, "minimal отклонён у модели, которая его принимает");
+  assert.ok(m.validateEffort("gpt-5.6-sol", "turbo"), "несуществующий уровень пропущен");
+  delete process.env.FAKE_MODELS;
+});
+
+await t("9d. при неполном каталоге effort не блокируется", async () => {
+  const d = fresh("efforts2");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE_MODELS = "not json";
+  const prev = process.cwd();
+  process.chdir(d);
+  fs.mkdirSync(path.join(d, ".codex"), { recursive: true });
+  fs.writeFileSync(path.join(d, ".codex", "config.toml"), 'model = "unknown-model"\n');
+  const m = await import(`${ROOT}/scripts/models.mjs?eff2=${Date.now()}`);
+  m.fetchModels({ force: true });
+  assert.equal(m.validateEffort("unknown-model", "high"), null, "заблокировал по неполному каталогу");
+  process.chdir(prev);
+  delete process.env.FAKE_MODELS;
+});
+
+await t("9e. отказ API по уровню усилий объясняется, шум кэша Codex отфильтрован", async () => {
+  const core = await import(`${ROOT}/scripts/codex-core.mjs?exp=${Date.now()}`);
+
+  const stderr = [
+    "2026-08-03T11:44:27.127313Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 86 column 5",
+    "Unsupported value: 'minimal' is not supported with the 'gpt-5.6-sol-1p-codexswic-ev3' model.",
+    "Supported values are: 'none', 'low', 'medium', 'high', 'xhigh', and 'max'.",
+  ].join("\n");
+
+  const clean = core.denoise(stderr);
+  assert.ok(!/models cache/.test(clean), "служебный шум Codex не отфильтрован");
+  assert.ok(/Unsupported value/.test(clean), "полезная строка потеряна");
+
+  const reason = core.explainCodexFailure(clean);
+  assert.ok(reason, "причина не распознана");
+  assert.match(reason, /не принимает уровень усилий "minimal"/);
+  assert.match(reason, /low/, "не перечислены поддерживаемые значения");
+
+  assert.match(core.explainCodexFailure("Error: not logged in"), /codex login/);
+  assert.match(core.explainCodexFailure("error: unexpected argument '--ask-for-approval'"), /exec-caps\.json/);
+});
+
+// ───────────────── 14. Нераскрытые плейсхолдеры (найдено при первом запуске)
+
+await t("14a. литеральный ${CLAUDE_PLUGIN_DATA} не создаёт каталог в проекте", async () => {
+  const d = fresh("placeholder");
+  const prev = process.cwd();
+  process.chdir(d);
+  process.env.CLAUDE_PLUGIN_DATA = "${CLAUDE_PLUGIN_DATA}"; // подстановка не сработала
+  const core = await import(`${ROOT}/scripts/codex-core.mjs?ph=${Date.now()}`);
+  const dir = core.dataDir();
+
+  assert.ok(path.isAbsolute(dir), `относительный путь: ${dir}`);
+  assert.ok(!dir.includes("${"), `плейсхолдер попал в путь: ${dir}`);
+  assert.ok(
+    !fs.existsSync(path.join(d, "${CLAUDE_PLUGIN_DATA}")),
+    "в проекте создан каталог с именем плейсхолдера"
+  );
+  process.chdir(prev);
+  delete process.env.CLAUDE_PLUGIN_DATA;
+});
+
+await t("14b. относительный CLAUDE_PLUGIN_DATA отвергается", async () => {
+  const d = fresh("relative");
+  const prev = process.cwd();
+  process.chdir(d);
+  process.env.CLAUDE_PLUGIN_DATA = "some/relative/dir";
+  const core = await import(`${ROOT}/scripts/codex-core.mjs?rel=${Date.now()}`);
+  assert.ok(path.isAbsolute(core.dataDir()));
+  assert.ok(!fs.existsSync(path.join(d, "some")), "создан относительный каталог в проекте");
+  process.chdir(prev);
+  delete process.env.CLAUDE_PLUGIN_DATA;
+});
+
+await t("14c. нераскрытый ${user_config.*} не уходит в аргументы codex", async () => {
+  const d = fresh("usercfg");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.CODEX_BRIDGE_MODEL = "${user_config.default_model}";
+  process.env.CODEX_BRIDGE_EFFORT = "${user_config.default_effort}";
+  const core = await import(`${ROOT}/scripts/codex-core.mjs?uc=${Date.now()}`);
+  const args = core.buildArgs({ mode: "ask", cwd: d });
+
+  assert.ok(!args.some((a) => String(a).includes("${")), `плейсхолдер в аргументах: ${args.join(" ")}`);
+  assert.ok(!args.includes("-m"), "пустая модель передана в -m");
+  delete process.env.CODEX_BRIDGE_MODEL;
+  delete process.env.CODEX_BRIDGE_EFFORT;
+});
+
+await t("14d. .mcp.json не переопределяет автоэкспортируемые CLAUDE_*", async () => {
+  const mcp = JSON.parse(fs.readFileSync(`${ROOT}/.mcp.json`, "utf8"));
+  for (const [name, srv] of Object.entries(mcp.mcpServers)) {
+    for (const key of Object.keys(srv.env || {})) {
+      assert.ok(
+        !key.startsWith("CLAUDE_"),
+        `сервер ${name} переопределяет ${key}, которая и так экспортируется Claude Code`
+      );
+    }
+  }
+});
+
+// ────────── 15. Сбой песочницы Windows (найдено при запуске на Windows)
+
+await t("15a. сбой песочницы распознаётся, а не выглядит отказом пользователя", async () => {
+  const core = await import(`${ROOT}/scripts/codex-core.mjs?sb=${Date.now()}`);
+
+  const real =
+    "windows sandbox: orchestrator_helper_launch_failed: setup refresh failed to " +
+    "launch helper: helper=codex-windows-sandbox-setup.exe, error=program not found";
+  const r = core.explainCodexFailure(real);
+  assert.ok(r, "причина не распознана");
+  assert.match(r, /песочниц/i);
+  assert.match(r, /мост исправен/, "не сказано, что MCP-сервер тут ни при чём");
+  assert.match(r, /npm install -g @openai\/codex/, "нет действия по починке");
+
+  // Именно так сбой выходит наружу и увёл диагностику в сторону
+  const masked = core.explainCodexFailure("user cancelled MCP tool call");
+  assert.ok(masked, "маскированная форма не распознана");
+  assert.match(masked, /песочниц|setup/i);
+});
+
+await t("15b. bypass_sandbox выключен по умолчанию и включается явно", async () => {
+  const d = fresh("bypass");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE_HELP =
+    "Usage: codex exec\n  --sandbox <mode>\n  --cd <dir>\n  --dangerously-bypass-approvals-and-sandbox";
+
+  delete process.env.CODEX_BRIDGE_BYPASS_SANDBOX;
+  let core = await import(`${ROOT}/scripts/codex-core.mjs?b1=${Date.now()}`);
+  let args = core.buildArgs({ mode: "ask", cwd: d });
+  assert.ok(!args.includes("--dangerously-bypass-approvals-and-sandbox"), "обход включён без настройки");
+  assert.ok(args.includes("--sandbox"), "песочница не запрошена");
+
+  // Нераскрытый плейсхолдер настройки не должен включать аварийный режим
+  process.env.CODEX_BRIDGE_BYPASS_SANDBOX = "${user_config.bypass_sandbox}";
+  core = await import(`${ROOT}/scripts/codex-core.mjs?b2=${Date.now()}`);
+  assert.equal(core.bypassSandboxEnabled(), false, "плейсхолдер включил обход");
+
+  process.env.CODEX_BRIDGE_BYPASS_SANDBOX = "true";
+  core = await import(`${ROOT}/scripts/codex-core.mjs?b3=${Date.now()}`);
+  args = core.buildArgs({ mode: "delegate", cwd: d });
+  assert.ok(args.includes("--dangerously-bypass-approvals-and-sandbox"), "обход не применился");
+  assert.ok(!args.includes("--sandbox"), "конфликтующие флаги переданы вместе");
+  delete process.env.CODEX_BRIDGE_BYPASS_SANDBOX;
+  delete process.env.FAKE_HELP;
+});
+
+await t("15c. рассинхрон версий Codex обнаруживается", async () => {
+  const d = fresh("health");
+  const home = path.join(d, "codexhome");
+  fs.mkdirSync(path.join(home, ".sandbox-bin"), { recursive: true });
+  process.env.CODEX_HOME = home;
+  process.env.CODEX_BIN = fakeCodex(d); // сообщает версию 0.0.0-fake
+
+  // Воспроизводим ровно наблюдавшуюся картину
+  for (const f of [
+    "codex-command-runner-0.145.0-alpha.18.exe",
+    "codex-command-runner-0.146.0-alpha.3.1.exe",
+    "codex-command-runner-0.146.0-alpha.9.2.exe",
+  ]) {
+    fs.writeFileSync(path.join(home, ".sandbox-bin", f), "");
+  }
+  fs.writeFileSync(path.join(home, "config.toml"), "[windows]\nsandbox = 'elevated'\n");
+
+  const h = await import(`${ROOT}/scripts/codex-health.mjs?h=${Date.now()}`);
+  const bin = h.inspectSandboxBin();
+  assert.equal(bin.hasWindowsSetup, false, "отсутствие windows-sandbox-setup не замечено");
+  assert.deepEqual(bin.versions.sort(), ["0.145.0-alpha.18", "0.146.0-alpha.3.1", "0.146.0-alpha.9.2"]);
+  assert.equal(h.windowsSandboxMode(), "elevated", "режим песочницы не прочитан из config.toml");
+
+  const r = h.inspect();
+  assert.ok(r.problems.length, "рассинхрон версий не отмечен как проблема");
+  assert.match(h.format(r), /Решение:/, "нет готового действия");
+  delete process.env.CODEX_HOME;
+});
+
 // ───────────────────────────────── 10. Парсер аргументов setup
 
 await t("10. setup отвергает флаг вместо значения и взаимоисключающие пары", async () => {

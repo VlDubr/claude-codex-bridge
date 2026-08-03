@@ -9,14 +9,36 @@ import crypto from "node:crypto";
 
 // ---------------------------------------------------------------- пути и стор
 
+/**
+ * Читает переменную окружения, отбрасывая нераскрытые плейсхолдеры.
+ *
+ * Claude Code подставляет ${CLAUDE_PLUGIN_DATA} и ${user_config.KEY} в env
+ * MCP-сервера, но подстановка может не произойти — например, когда поле
+ * userConfig оставлено пустым. Тогда в переменную попадает литеральная строка
+ * "${...}", и дальше она молча используется как значение: относительный путь
+ * превращается в каталог с именем плейсхолдера, а имя модели — в мусор,
+ * который отвергнет Codex. Проверка одна и на всех.
+ */
+export function envClean(name) {
+  const v = process.env[name];
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  if (!t || /^\$\{.*\}$/.test(t)) return undefined;
+  return t;
+}
+
 const JOB_ID_RE = /^job-[0-9a-f]{8}$/;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
 export function dataDir() {
+  const fromEnv = envClean("CLAUDE_PLUGIN_DATA");
+  // Только абсолютный путь: относительный создал бы служебный каталог прямо
+  // в проекте пользователя.
   const base =
-    process.env.CLAUDE_PLUGIN_DATA ||
-    path.join(os.homedir(), ".claude", "plugins", "data", "codex-bridge");
+    fromEnv && path.isAbsolute(fromEnv)
+      ? fromEnv
+      : path.join(os.homedir(), ".claude", "plugins", "data", "codex-bridge");
   const dir = path.join(base, "jobs");
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   try {
@@ -73,7 +95,7 @@ function repoKey(cwd) {
 // --------------------------------------------------------------- поиск codex
 
 export function codexBinary() {
-  return process.env.CODEX_BIN || "codex";
+  return envClean("CODEX_BIN") || "codex";
 }
 
 export function checkCodex() {
@@ -120,6 +142,7 @@ export function capabilities({ force = false } = {}) {
     skipGitRepoCheck: /--skip-git-repo-check/.test(text),
     cd: /--cd\b/.test(text),
     image: /--image\b/.test(text),
+    bypassSandbox: /--dangerously-bypass-approvals-and-sandbox/.test(text),
     // help не прочитался — не выключаем базовые флаги, но и не включаем спорные
     probed: text.trim().length > 0,
   };
@@ -139,6 +162,11 @@ export function capabilities({ force = false } = {}) {
 
 // ------------------------------------------------------------- сборка команды
 
+export function bypassSandboxEnabled() {
+  const v = envClean("CODEX_BRIDGE_BYPASS_SANDBOX");
+  return v === "true" || v === "1" || v === "yes";
+}
+
 const SANDBOX_BY_MODE = {
   ask: "read-only",
   review: "read-only",
@@ -151,15 +179,30 @@ export function buildArgs({ mode, model, effort, cwd, sandbox, images = [] }) {
   const args = ["exec"];
   if (caps.skipGitRepoCheck) args.push("--skip-git-repo-check");
 
+  // Аварийный обход: нужен, когда песочница Codex сломана рассинхроном версий.
+  // Включается только явной настройкой — Codex тогда выполняет команды без
+  // изоляции, и это осознанный размен, а не значение по умолчанию.
+  if (bypassSandboxEnabled() && caps.bypassSandbox) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+    if (cwd && caps.cd) args.push("--cd", cwd);
+    const mb = model || envClean("CODEX_BRIDGE_MODEL");
+    if (mb) args.push("-m", mb);
+    const eb = effort || envClean("CODEX_BRIDGE_EFFORT");
+    if (eb) args.push("-c", `model_reasoning_effort="${eb}"`);
+    if (caps.image) for (const img of images) args.push("--image", img);
+    args.push("-");
+    return args;
+  }
+
   const sb = sandbox || SANDBOX_BY_MODE[mode] || "read-only";
   if (caps.sandbox) args.push("--sandbox", sb);
   // exec и так неинтерактивен; флаг добавляем только если он существует
   if (sb === "workspace-write" && caps.askForApproval) args.push("--ask-for-approval", "never");
   if (cwd && caps.cd) args.push("--cd", cwd);
 
-  const m = model || process.env.CODEX_BRIDGE_MODEL;
+  const m = model || envClean("CODEX_BRIDGE_MODEL");
   if (m) args.push("-m", m);
-  const e = effort || process.env.CODEX_BRIDGE_EFFORT;
+  const e = effort || envClean("CODEX_BRIDGE_EFFORT");
   if (e) args.push("-c", `model_reasoning_effort="${e}"`);
   if (caps.image) for (const img of images) args.push("--image", img);
 
@@ -244,6 +287,87 @@ export function buildPrompt({ mode, task, focus, question, context, cwd, base })
   return mode === "challenge" ? PROMPTS.challenge(diff, focus) : PROMPTS.review(diff, focus);
 }
 
+// ------------------------------------------------- разбор ошибок Codex
+
+// Строки, которые Codex пишет всегда и которые к делу не относятся.
+// Самая частая — рассинхрон формата его собственного кэша моделей; на работу
+// не влияет, но забивает сообщение об ошибке и пугает пользователя.
+const NOISE = [
+  /failed to load models cache/i,
+  /codex_models_manager::cache/i,
+  /^\s*$/,
+];
+
+export function denoise(text) {
+  return String(text || "")
+    .split("\n")
+    .filter((l) => !NOISE.some((re) => re.test(l)))
+    .join("\n")
+    .trim();
+}
+
+/**
+ * Переводит типовые отказы Codex в понятное объяснение с готовым действием.
+ * Без этого пользователь видит кусок JSON от API и стектрейс Rust.
+ */
+export function explainCodexFailure(stderr, stdout = "") {
+  const all = `${stderr}\n${stdout}`;
+
+  // Уровень reasoning, не поддерживаемый моделью
+  const eff = /'([^']+)' is not supported with the '([^']+)' model/i.exec(all);
+  if (eff) {
+    const supported = [...all.matchAll(/'([a-z]+)'/gi)]
+      .map((m) => m[1])
+      .filter((v) => ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(v) && v !== eff[1]);
+    return (
+      `Модель ${eff[2]} не принимает уровень усилий "${eff[1]}".` +
+      (supported.length ? ` Поддерживаются: ${[...new Set(supported)].join(", ")}.` : "") +
+      ` Задай другой уровень аргументом effort или в настройке default_effort плагина.`
+    );
+  }
+
+  // Сбой песочницы Windows. Наружу выходит как "mcp ... (failed)" или
+  // "user cancelled MCP tool call" — читается как отказ пользователя или
+  // мёртвый сервер, хотя причина в рассинхроне версий установки Codex.
+  const helper = /orchestrator_helper_launch_failed|helper=([\w.-]*sandbox[\w.-]*)|codex-windows-sandbox-setup/i.exec(all);
+  if (helper || (/windows sandbox/i.test(all) && /program not found|failed to launch/i.test(all))) {
+    return (
+      `Не запустилась песочница Windows: Codex не нашёл вспомогательный бинарь` +
+      (helper?.[1] ? ` (${helper[1]})` : "") +
+      `. Это не отказ MCP-сервера и не отмена пользователем — мост исправен.\n` +
+      `Обычная причина: установка Codex собрана из разных версий (CLI одной версии, ` +
+      `хелперы в ~/.codex/.sandbox-bin другой).\n` +
+      `Что делать: переустановить Codex целиком (npm install -g @openai/codex) — это решает причину; ` +
+      `либо, как временный обход, включить настройку плагина bypass_sandbox, ` +
+      `но тогда Codex будет выполнять команды без изоляции. Диагностика: /codex-bridge:setup`
+    );
+  }
+
+  if (/user cancelled MCP tool call|tool call was cancelled/i.test(all) && !/interrupt/i.test(all)) {
+    return (
+      `Codex сообщил об отмене вызова инструмента. Если вы ничего не отменяли, ` +
+      `наиболее вероятная причина — сбой песочницы Codex, который выходит наружу именно так. ` +
+      `Проверьте: /codex-bridge:setup`
+    );
+  }
+
+  if (/not logged in|no credentials|unauthorized|401/i.test(all)) {
+    return "Codex не авторизован или сессия истекла. Выполни в терминале: codex login";
+  }
+  if (/rate.?limit|quota|429/i.test(all)) {
+    return "Достигнут лимит подписки ChatGPT. Подожди сброса квоты или смени модель на более дешёвую.";
+  }
+  if (/unexpected argument\s+'?(--[\w-]+)/i.test(all)) {
+    const flag = /unexpected argument\s+'?(--[\w-]+)/i.exec(all)[1];
+    return (
+      `Эта сборка Codex не знает флаг ${flag}. Кэш определения флагов устарел — ` +
+      `он привязан к версии бинаря и обновится сам, но можно сбросить вручную: ` +
+      `удали exec-caps.json в каталоге данных плагина.`
+    );
+  }
+  return null;
+}
+
 // ---------------------------------------------------------- синхронный запуск
 
 export function runSync(opts) {
@@ -263,20 +387,23 @@ export function runSync(opts) {
     return { ok: false, error: "Codex CLI не найден. Установи: npm install -g @openai/codex" };
   if (r.error) return { ok: false, error: String(r.error.message || r.error) };
 
-  const out = (r.stdout || "").trim();
-  const errText = (r.stderr || "").trim();
+  const out = denoise(r.stdout);
+  const errText = denoise(r.stderr);
 
   // Ненулевой код — всегда ошибка, даже если что-то успело напечататься:
   // частичный отчёт, выданный за успех, опаснее пустого отказа.
   if (r.status !== 0) {
+    const reason = explainCodexFailure(errText, out);
     return {
       ok: false,
       exitCode: r.status,
       partialOutput: out || null,
+      reason,
       error:
+        (reason ? `${reason}\n\n` : "") +
         `Codex завершился с кодом ${r.status}.` +
         (errText ? `\n${errText.slice(0, 800)}` : "") +
-        (out ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
+        (out && !reason ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
     };
   }
   return { ok: true, output: out, stderr: errText };
@@ -321,8 +448,8 @@ export function startJob(opts) {
     id,
     pid: child.pid,
     mode: opts.mode,
-    model: opts.model || process.env.CODEX_BRIDGE_MODEL || null,
-    effort: opts.effort || process.env.CODEX_BRIDGE_EFFORT || null,
+    model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
+    effort: opts.effort || envClean("CODEX_BRIDGE_EFFORT") || null,
     label: String(opts.task || opts.focus || opts.question || opts.mode || "").slice(0, 120),
     cwd,
     repo: repoKey(cwd),
@@ -373,7 +500,7 @@ function reconcile(job) {
     return writeJob(job);
   }
 
-  const limit = Number(process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN || 30) * 60_000;
+  const limit = (Number(envClean("CODEX_BRIDGE_JOB_TIMEOUT_MIN")) || 30) * 60_000;
   if (Date.now() - new Date(job.startedAt).getTime() > limit) {
     killGroup(job.pid);
     job.status = "timeout";

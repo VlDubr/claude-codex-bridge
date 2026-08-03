@@ -12,8 +12,9 @@ import {
   jobOutput,
   cancelJob,
   humanAge,
+  envClean,
 } from "./codex-core.mjs";
-import { fetchModels, formatModels, knownModel } from "./models.mjs";
+import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
 
 const TOOLS = [
   {
@@ -30,7 +31,12 @@ const TOOLS = [
             "Твой текущий контекст: что ты уже выяснил, какое решение предлагаешь, какие есть сомнения. Чем конкретнее, тем полезнее ответ.",
         },
         model: { type: "string", description: "Модель Codex, напр. gpt-5.6-sol или gpt-5.4-mini." },
-        effort: { type: "string", enum: ["minimal", "low", "medium", "high"] },
+        effort: {
+          type: "string",
+          enum: EFFORT_LEVELS,
+          description:
+            "Уровень reasoning. Набор зависит от модели: точный список отдаёт codex_models. Значение minimal принимают только модели прошлых поколений — gpt-5.6 и новее отвергают его ошибкой API.",
+        },
       },
       required: ["question"],
     },
@@ -46,7 +52,12 @@ const TOOLS = [
         focus: { type: "string", description: "Опциональный дополнительный фокус." },
         background: { type: "boolean", default: true },
         model: { type: "string" },
-        effort: { type: "string", enum: ["minimal", "low", "medium", "high"] },
+        effort: {
+          type: "string",
+          enum: EFFORT_LEVELS,
+          description:
+            "Уровень reasoning. Набор зависит от модели: точный список отдаёт codex_models. Значение minimal принимают только модели прошлых поколений — gpt-5.6 и новее отвергают его ошибкой API.",
+        },
       },
     },
   },
@@ -64,7 +75,12 @@ const TOOLS = [
         base: { type: "string" },
         background: { type: "boolean", default: true },
         model: { type: "string" },
-        effort: { type: "string", enum: ["minimal", "low", "medium", "high"] },
+        effort: {
+          type: "string",
+          enum: EFFORT_LEVELS,
+          description:
+            "Уровень reasoning. Набор зависит от модели: точный список отдаёт codex_models. Значение minimal принимают только модели прошлых поколений — gpt-5.6 и новее отвергают его ошибкой API.",
+        },
       },
     },
   },
@@ -77,7 +93,12 @@ const TOOLS = [
       properties: {
         task: { type: "string", description: "Описание задачи для GPT, максимально конкретное." },
         model: { type: "string" },
-        effort: { type: "string", enum: ["minimal", "low", "medium", "high"] },
+        effort: {
+          type: "string",
+          enum: EFFORT_LEVELS,
+          description:
+            "Уровень reasoning. Набор зависит от модели: точный список отдаёт codex_models. Значение minimal принимают только модели прошлых поколений — gpt-5.6 и новее отвергают его ошибкой API.",
+        },
       },
       required: ["task"],
     },
@@ -143,7 +164,12 @@ function fmtJob(j) {
 function handleTool(name, args) {
   const problem = guard();
   if (problem) return err(problem);
-  const cwd = process.env.CODEX_BRIDGE_CWD || process.cwd();
+  const cwd = envClean("CODEX_BRIDGE_CWD") || envClean("CLAUDE_PROJECT_DIR") || process.cwd();
+
+  if (args.effort) {
+    const problem = validateEffort(args.model, args.effort);
+    if (problem) return err(`${problem}\nПолный список — инструмент codex_models.`);
+  }
 
   if (args.model) {
     const k = knownModel(args.model);

@@ -94,7 +94,7 @@ export class McpStdioClient {
     await this.#request("initialize", {
       protocolVersion: PROTOCOL,
       capabilities: {},
-      clientInfo: { name: "codex-bridge", version: "0.2.0" },
+      clientInfo: { name: "codex-bridge", version: "0.2.3" },
     });
     this.#send({ jsonrpc: "2.0", method: "notifications/initialized" });
 

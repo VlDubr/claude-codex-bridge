@@ -5,8 +5,9 @@ import fs from "node:fs";
 import { parseArgs } from "node:util";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { checkCodex, dataDir } from "./codex-core.mjs";
+import { checkCodex, dataDir, envClean, bypassSandboxEnabled as bypassOn } from "./codex-core.mjs";
 import { fetchModels } from "./models.mjs";
+import { inspect as inspectCodex, format as formatCodex } from "./codex-health.mjs";
 import { link, unlink, isLinked, linkedPath, bridgePath, CONFIG_PATH } from "./link-back.mjs";
 import {
   readExposed,
@@ -71,7 +72,7 @@ if (c.reason === "not_installed") {
   lines.push(c.ok ? `auth:     OK (${c.authInfo.split("\n")[0] || "авторизован"})` : `auth:     НЕТ — выполни: codex login`);
 }
 
-const claudeBin = spawnSync(process.env.CLAUDE_BIN || "claude", ["--version"], { encoding: "utf8" });
+const claudeBin = spawnSync(envClean("CLAUDE_BIN") || "claude", ["--version"], { encoding: "utf8" });
 lines.push(
   claudeBin.error
     ? `claude:   не найден в PATH (обратный мост GPT→Claude работать не будет)`
@@ -86,7 +87,15 @@ lines.push(
     ? `модели:   ${mr.models.length} шт. (${mr.source}) — ${mr.models.slice(0, 4).map((m) => m.id).join(", ")}${mr.models.length > 4 ? ", …" : ""}`
     : `модели:   не удалось получить — ${mr.error.split("\n")[0]}`
 );
-lines.push(`изображения → ${process.env.CODEX_BRIDGE_IMAGE_DIR || "assets/generated"} (встроенный image_gen, без API-ключа)`);
+const health = inspectCodex();
+lines.push("", formatCodex(health), "");
+if (bypassOn()) {
+  lines.push(
+    "ВНИМАНИЕ: включён bypass_sandbox — Codex выполняет команды без изоляции. " +
+      "Это аварийный режим; после починки установки Codex выключите его."
+  );
+}
+lines.push(`изображения → ${envClean("CODEX_BRIDGE_IMAGE_DIR") || "assets/generated"} (встроенный image_gen, без API-ключа)`);
 
 const back = isLinked();
 lines.push(`мост GPT→Claude: ${back ? "подключён" : "не подключён (включить: /codex-bridge:setup --link-back)"}`);
@@ -104,7 +113,7 @@ lines.push(
 );
 
 if (opts["expose-list"]) {
-  const avail = discoverClaudeServers(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  const avail = discoverClaudeServers(envClean("CLAUDE_PROJECT_DIR") || process.cwd());
   lines.push("", "MCP-серверы, найденные в конфигах Claude Code:");
   const names = Object.keys(avail);
   if (!names.length) {
@@ -124,7 +133,7 @@ if (opts["expose-list"]) {
 
 const toExpose = opts.expose;
 if (toExpose) {
-  const avail = discoverClaudeServers(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  const avail = discoverClaudeServers(envClean("CLAUDE_PROJECT_DIR") || process.cwd());
   const def = avail[toExpose];
   if (!def) {
     lines.push("", `Сервер "${toExpose}" не найден. Список: /codex-bridge:setup --expose-list`);

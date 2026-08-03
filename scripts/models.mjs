@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { codexBinary, dataDir } from "./codex-core.mjs";
+import { codexBinary, dataDir, envClean } from "./codex-core.mjs";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 часов
 const cachePath = () => path.join(path.dirname(dataDir()), "models-cache.json");
@@ -176,12 +176,53 @@ export function knownModel(id) {
   return { known: false, available: r.models.map((m) => m.id) };
 }
 
+/**
+ * Все уровни усилий, встречающиеся в линейке. Конкретная модель принимает лишь
+ * подмножество: gpt-5.6-sol отвергает `minimal` ошибкой API, а модели прошлых
+ * поколений его принимают. Поэтому список здесь широкий — он нужен только для
+ * схемы MCP-инструмента, а настоящую фильтрацию делает каталог модели.
+ */
+export const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Уровни, поддерживаемые конкретной моделью, или null если неизвестно. */
+export function effortsFor(id) {
+  if (!id) return null;
+  const r = fetchModels();
+  if (!r.ok || r.complete === false) return null;
+  const hit = r.models.find((m) => m.id === id);
+  return Array.isArray(hit?.efforts) && hit.efforts.length ? hit.efforts : null;
+}
+
+/**
+ * Проверяет уровень усилий против каталога. Блокирует только когда точно
+ * известно, что модель его не примет: иначе получили бы ту же болезнь, что и
+ * с зашитыми списками моделей.
+ */
+export function validateEffort(model, effort) {
+  if (!effort) return null;
+  if (!EFFORT_LEVELS.includes(effort)) {
+    return (
+      `Уровень усилий "${effort}" не входит в известный набор: ${EFFORT_LEVELS.join(", ")}. ` +
+      `Точный список для модели — инструмент codex_models.`
+    );
+  }
+  const supported = effortsFor(model || envClean("CODEX_BRIDGE_MODEL"));
+  if (supported && !supported.includes(effort)) {
+    return (
+      `Модель ${model || envClean("CODEX_BRIDGE_MODEL")} не принимает уровень усилий "${effort}". ` +
+      `Поддерживаются: ${supported.join(", ")}.`
+    );
+  }
+  return null;
+}
+
 export function formatModels(r) {
   if (!r.ok) return r.error;
   const lines = r.models.map((m) => {
     const bits = [m.id];
     if (m.label && m.label !== m.id) bits.push(`— ${m.label}`);
     if (m.efforts?.length) bits.push(`[effort: ${m.efforts.join(", ")}]`);
+    else bits.push("[effort: не объявлен каталогом]");
     if (m.default) bits.push("(по умолчанию)");
     return "  " + bits.join(" ");
   });

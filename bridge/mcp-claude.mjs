@@ -13,7 +13,13 @@ import { spawnSync } from "node:child_process";
 import { serve, text, fail } from "../scripts/mcp-lib.mjs";
 import { ToolProxy, readExposed } from "./tool-proxy.mjs";
 
-const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
+const cleanEnv = (n) => {
+  const v = process.env[n];
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return !t || /^\$\{.*\}$/.test(t) ? undefined : t;
+};
+const CLAUDE_BIN = cleanEnv("CLAUDE_BIN") || "claude";
 const cfg = readExposed();
 
 // ------------------------------------------------------- Claude как процесс
@@ -233,4 +239,4 @@ ${write ? "Ты можешь изменять файлы." : "Работай т�
 
 process.on("exit", () => proxy.stop());
 
-serve({ name: "claude-bridge", version: "0.2.0", tools: TOOLS, handle });
+serve({ name: "claude-bridge", version: "0.2.3", tools: TOOLS, handle });

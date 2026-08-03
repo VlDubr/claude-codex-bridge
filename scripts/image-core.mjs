@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { codexBinary } from "./codex-core.mjs";
+import { codexBinary, denoise, explainCodexFailure, envClean, bypassSandboxEnabled } from "./codex-core.mjs";
 
 export const PROMPT_MAX = 20_000;
 export const ASPECT_RATIOS = ["1:1", "9:16", "16:9", "4:3", "3:4", "auto"];
@@ -20,7 +20,7 @@ export const MAX_INPUT_IMAGES = 16;
 
 /** Куда встроенный инструмент кладёт результат по умолчанию. */
 const codexGenDir = () =>
-  path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "generated_images");
+  path.join(envClean("CODEX_HOME") || path.join(os.homedir(), ".codex"), "generated_images");
 
 // ------------------------------------------------------------------ валидация
 
@@ -192,7 +192,7 @@ export function generateImage(opts) {
     out_dir,
     name,
     cwd = process.cwd(),
-    timeoutMs = Number(process.env.CODEX_BRIDGE_IMAGE_TIMEOUT_MS || 15) * 60_000,
+    timeoutMs = (Number(envClean("CODEX_BRIDGE_IMAGE_TIMEOUT_MIN")) || 15) * 60_000,
   } = opts;
 
   const errors = validate({ prompt, aspect_ratio, image_resolution, images });
@@ -207,7 +207,7 @@ export function generateImage(opts) {
 
   let dir;
   try {
-    dir = resolveInside(cwd, out_dir || process.env.CODEX_BRIDGE_IMAGE_DIR || "assets/generated", "out_dir");
+    dir = resolveInside(cwd, out_dir || envClean("CODEX_BRIDGE_IMAGE_DIR") || "assets/generated", "out_dir");
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
@@ -216,16 +216,13 @@ export function generateImage(opts) {
   const file = `${slug(name || prompt)}-${crypto.randomBytes(3).toString("hex")}.png`;
   const target = path.join(dir, file);
 
-  const args = [
-    "exec",
-    "--skip-git-repo-check",
-    "--sandbox",
-    "workspace-write",
-    "--ask-for-approval",
-    "never",
-    "--cd",
-    cwd,
-  ];
+  const args = ["exec", "--skip-git-repo-check"];
+  if (bypassSandboxEnabled()) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  } else {
+    args.push("--sandbox", "workspace-write", "--ask-for-approval", "never");
+  }
+  args.push("--cd", cwd);
   if (model) args.push("-m", model);
   for (const r of refs) args.push("--image", r);
   args.push("-");
@@ -248,16 +245,18 @@ export function generateImage(opts) {
     };
   if (r.error) return { ok: false, error: String(r.error.message || r.error) };
 
-  const out = (r.stdout || "").trim();
-  const errText = (r.stderr || "").trim();
+  const out = denoise(r.stdout);
+  const errText = denoise(r.stderr);
   const tailOf = (t) => t.split("\n").slice(-15).join("\n");
 
   // Код возврата проверяем ДО поиска файлов: иначе подберём чужой артефакт
   // и выдадим провалившийся запуск за успех.
   if (r.status !== 0) {
+    const reason = explainCodexFailure(errText, out);
     return {
       ok: false,
       error:
+        (reason ? `${reason}\n\n` : "") +
         `Codex завершился с кодом ${r.status}.` +
         (errText ? `\n${errText.slice(0, 500)}` : "") +
         `\n\nПоследние строки вывода:\n${tailOf(out)}`,

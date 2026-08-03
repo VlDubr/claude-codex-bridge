@@ -9,9 +9,15 @@ import os from "node:os";
 import path from "node:path";
 import { McpStdioClient } from "./mcp-client.mjs";
 
+const cleanEnv = (n) => {
+  const v = process.env[n];
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return !t || /^\$\{.*\}$/.test(t) ? undefined : t;
+};
+
 export const EXPOSED_PATH =
-  process.env.CODEX_BRIDGE_EXPOSED ||
-  path.join(os.homedir(), ".codex", "codex-bridge", "exposed.json");
+  cleanEnv("CODEX_BRIDGE_EXPOSED") || path.join(os.homedir(), ".codex", "codex-bridge", "exposed.json");
 
 export function readExposed() {
   try {

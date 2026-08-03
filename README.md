@@ -114,10 +114,11 @@ On enable, Claude Code prompts for a few values — all optional:
 | Setting | What it controls |
 |---|---|
 | `default_model` | Default Codex model. See `/codex-bridge:models` for the list |
-| `default_effort` | Reasoning level: `minimal`, `low`, `medium`, `high` |
+| `default_effort` | Reasoning level: `low`, `medium`, `high`, `xhigh`, `max`. The exact set depends on the model — see `/codex-bridge:models` |
 | `job_timeout_minutes` | When to kill a stuck background job (default 30) |
 | `image_output_dir` | Where images go (default `assets/generated`) |
 | `image_timeout_minutes` | Image generation timeout (default 15) |
+| `bypass_sandbox` | Emergency escape hatch for a broken Codex sandbox. Off by default — see Troubleshooting |
 
 ### The GPT → Claude bridge
 
@@ -195,6 +196,18 @@ Usage draws on your **ChatGPT subscription** limits, separately from your Claude
 
 Note that `/codex-bridge:image` takes 4–6 minutes — Codex reasons first and only then calls the tool. 4K takes longer. That's normal, not a hang.
 
+## Troubleshooting
+
+**"The model doesn't accept effort level X"** — the available levels depend on the model. `minimal` is only accepted by earlier generations; `gpt-5.6` and newer reject it with an API error. Check `/codex-bridge:models`, which lists the levels next to each model, and use `low` or higher.
+
+**`failed to load models cache: missing field ...` in Codex logs** — a format mismatch in Codex's own internal cache. It doesn't affect anything. The plugin filters this line out of error messages so it can't mask the real cause.
+
+**On Windows: `orchestrator_helper_launch_failed` / `program not found`, or an unexplained "user cancelled MCP tool call"** — Codex's sandbox failed to start. This surfaces as an MCP failure or a user cancellation, so it reads like a dead bridge when the bridge is fine. The usual cause is a mixed Codex installation: the CLI is one version while the helpers in `~/.codex/.sandbox-bin` are another. Run `/codex-bridge:setup` — it compares the versions and names the mismatch. The fix is reinstalling Codex (`npm install -g @openai/codex`). As a stopgap you can enable the `bypass_sandbox` setting, but then Codex runs commands without isolation.
+
+**`unexpected argument '--...'`** — the `codex exec` flag set changed between versions. The plugin detects flags itself and caches them per binary version; if the cache is stale, delete `exec-caps.json` in the plugin data directory.
+
+**Environment diagnostics** — `/codex-bridge:setup` reports the Codex version, auth state, model catalog, and reverse bridge status.
+
 ## Limitations
 
 - MCP proxying only works with **stdio** servers. HTTP/SSE servers with their own OAuth are easier to register with Codex directly.
@@ -205,7 +218,7 @@ Note that `/codex-bridge:image` takes 4–6 minutes — Codex reasons first and 
 
 ## Development
 
-Architecture, internals, tests, and publishing live in **[README_DEV.en.md](README_DEV.en.md)**.
+Architecture, internals, tests, and publishing live in **[README_DEV.md](README_DEV.md)**.
 
 ```bash
 node tests/regressions.mjs   # 27 tests, no real codex/claude needed

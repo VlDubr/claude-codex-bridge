@@ -1,88 +1,105 @@
-# Claude Codex Bridge — документация для разработки
+# Claude Codex Bridge — development guide
 
-**Русский** · [English](README_DEV.en.md)
+[Русский](README_DEV.ru.md) · **English**
 
-Пользовательская документация — в [README.md](README.md). Здесь только то, что нужно для работы над самим плагином: архитектура, внутреннее устройство, тесты, публикация.
+User documentation lives in [README.md](README.md). This file covers only what you need to work on the plugin itself: architecture, internals, tests, publishing.
 
 ---
 
-## Архитектура
+## Architecture
 
-Плагин не реализует ни OAuth, ни HTTP-клиентов к моделям. Всё общение с GPT идёт через локальный `codex` CLI, всё общение с Claude из обратного направления — через `claude -p`. Это осознанное решение: токены остаются в тех хранилищах, куда их положили официальные инструменты, а плагин не становится ещё одним местом, где может утечь чужой секрет.
+The plugin implements neither OAuth nor HTTP clients to any model. All communication with GPT goes through the local `codex` CLI; all communication with Claude from the reverse direction goes through `claude -p`. That's deliberate: tokens stay in the stores the official tools put them in, and the plugin never becomes one more place someone else's secret can leak from.
 
-Три канала связи:
+Three channels:
 
-| Канал | Механизм | Где объявлен |
+| Channel | Mechanism | Declared in |
 |---|---|---|
-| Claude → GPT | MCP-сервер `codex` | `.mcp.json` |
-| Claude → изображения | MCP-сервер `image` | `.mcp.json` |
-| GPT → Claude | MCP-сервер `claude-bridge` | `~/.codex/config.toml` |
+| Claude → GPT | MCP server `codex` | `.mcp.json` |
+| Claude → images | MCP server `image` | `.mcp.json` |
+| GPT → Claude | MCP server `claude-bridge` | `~/.codex/config.toml` |
 
-Внешних зависимостей нет. Оба MCP-сервера и MCP-клиент реализуют JSON-RPC поверх stdio средствами стандартной библиотеки Node.
+No external dependencies. Both MCP servers and the MCP client implement JSON-RPC over stdio using only the Node standard library.
 
-## Структура
+## Layout
 
 ```
 claude-codex-bridge/
 ├── .claude-plugin/
-│   ├── plugin.json          манифест, userConfig, defaultEnabled: false
-│   └── marketplace.json     каталог из одного плагина, source: "."
-├── .mcp.json                регистрация серверов codex и image
-├── commands/                11 слэш-команд (промпт-шаблоны)
+│   ├── plugin.json          manifest, userConfig, defaultEnabled: false
+│   └── marketplace.json     single-plugin catalog, source: "."
+├── .mcp.json                registers the codex and image servers
+├── commands/                11 slash commands (prompt templates)
 ├── agents/                  gpt-delegate, gpt-advisor, image-smith
 ├── hooks/hooks.json         SessionStart → preflight
 ├── scripts/
-│   ├── mcp-lib.mjs          MCP-транспорт (сервер): JSON-RPC поверх stdio
-│   ├── codex-core.mjs       обёртка codex exec, capabilities, менеджер задач
-│   ├── mcp-codex.mjs        MCP-сервер Claude → GPT
-│   ├── models.mjs           каталог моделей: опрос Codex, кэш, сверка
-│   ├── image-core.mjs       генерация через встроенный image_gen
-│   ├── mcp-image.mjs        MCP-сервер генерации изображений
-│   ├── link-back.mjs        безопасное редактирование ~/.codex/config.toml
-│   ├── setup.mjs            диагностика, allowlist, link-back
-│   └── preflight.mjs        SessionStart-хук, самолечение пути моста
+│   ├── mcp-lib.mjs          MCP transport (server side): JSON-RPC over stdio
+│   ├── codex-core.mjs       codex exec wrapper, capabilities, job manager
+│   ├── mcp-codex.mjs        MCP server, Claude → GPT
+│   ├── codex-health.mjs           диагностика установки Codex, рассинхрон версий
+│   ├── models.mjs           model catalog: query Codex, cache, validate
+│   ├── image-core.mjs       generation via the built-in image_gen tool
+│   ├── mcp-image.mjs        MCP server for image generation
+│   ├── link-back.mjs        safe editing of ~/.codex/config.toml
+│   ├── setup.mjs            diagnostics, allowlist, link-back
+│   └── preflight.mjs        SessionStart hook, bridge path self-healing
 ├── bridge/
-│   ├── mcp-claude.mjs       MCP-сервер GPT → Claude
-│   ├── mcp-client.mjs       MCP-клиент для подключения к серверам Claude
-│   └── tool-proxy.mjs       allowlist, обнаружение серверов, переэкспорт
-└── tests/regressions.mjs    27 регрессионных тестов
+│   ├── mcp-claude.mjs       MCP server, GPT → Claude
+│   ├── mcp-client.mjs       MCP client for connecting to Claude's servers
+│   └── tool-proxy.mjs       allowlist, server discovery, re-export
+└── tests/regressions.mjs    27 regression tests
 ```
 
 ---
 
-### Три разных имени
+### Three different names
 
-Их легко перепутать, а последствия разные:
+They're easy to confuse, and they do different things:
 
-| Что | Значение | На что влияет |
+| What | Value | What it affects |
 |---|---|---|
-| Репозиторий | `claude-codex-bridge` | `/plugin marketplace add VlDubr/claude-codex-bridge` |
-| Маркетплейс (`marketplace.json` → `name`) | `claude-codex-bridge` | правая часть в `codex-bridge@claude-codex-bridge` |
-| Плагин (`plugin.json` → `name`) | `codex-bridge` | **префикс слэш-команд и субагентов**: `/codex-bridge:review`, `@codex-bridge:gpt-advisor` |
+| Repository | `claude-codex-bridge` | `/plugin marketplace add VlDubr/claude-codex-bridge` |
+| Marketplace (`marketplace.json` → `name`) | `claude-codex-bridge` | the right-hand side of `codex-bridge@claude-codex-bridge` |
+| Plugin (`plugin.json` → `name`) | `codex-bridge` | **the slash command and subagent prefix**: `/codex-bridge:review`, `@codex-bridge:gpt-advisor` |
 
-Префикс никогда не опускается: даже если имя команды совпадает с именем плагина, вызов всё равно будет `/plugin:command`. Поэтому имя плагина держим коротким — оно попадает в каждую команду. Переименование `plugin.json` → `name` меняет все команды разом и ломает мышечную память пользователей, так что делать это стоит только с бампом мажорной версии.
+The prefix is never optional: even when a command's name matches the plugin's, the invocation is still `/plugin:command`. So the plugin name stays short — it appears in every single command. Renaming `plugin.json` → `name` changes every command at once and breaks users' muscle memory, so only do it alongside a major version bump.
 
 ---
 
-## Внутреннее устройство
+## Internals
 
-### Определение флагов `codex exec`
+### Detecting `codex exec` flags
 
-Набор флагов менялся между версиями Codex: `--ask-for-approval` в ряде сборок отсутствует и вызывает `unexpected argument`. Поэтому флаги не угадываются — `capabilities()` в `codex-core.mjs` один раз читает `codex exec --help`, парсит наличие каждого флага и кэширует результат рядом с данными плагина, привязав к версии бинаря.
+The flag set changed across Codex versions: `--ask-for-approval` is absent in some builds and triggers `unexpected argument`. So flags are never guessed — `capabilities()` in `codex-core.mjs` reads `codex exec --help` once, parses which flags exist, and caches the result next to the plugin data, keyed by binary version.
 
-Вся сборка командной строки собрана в `buildArgs()`. Если запуск падает на аргументах, править нужно только там.
+All command-line assembly is confined to `buildArgs()`. If a launch fails on arguments, that's the only place to fix.
 
-### Менеджер фоновых задач
+### Codex installation health
 
-Конечный автомат без обратных переходов:
+`codex-health.mjs` exists because of one concrete incident: on Windows the sandbox refused to start, because the helpers in `~/.codex/.sandbox-bin` came from 0.145–0.146-alpha while the CLI was 0.144.6. The failure surfaced as `user cancelled MCP tool call` — indistinguishable from a user aborting, or from a dead MCP server. Diagnosis went the wrong way for a while.
+
+`inspect()` compares the CLI version against versions parsed out of the helper filenames, checks that `codex-windows-sandbox-setup.exe` exists when `[windows] sandbox` is enabled, and returns problems as *what / why / fix* rather than as bare facts. `explainCodexFailure()` recognises both the raw form and the masked one, and states explicitly that the bridge is not at fault.
+
+`bypass_sandbox` switches `codex exec` to `--dangerously-bypass-approvals-and-sandbox`. It's off by default and gated behind capability detection: it removes isolation entirely, so it's an emergency measure while the installation is being fixed, not a configuration choice.
+
+### Effort levels
+
+The same class of mistake as with models — I just managed to make it twice: the `reasoning effort` set depends on the model, and a hardcoded list goes stale silently. `gpt-5.6-sol` rejects `minimal` with an API error; earlier generations accept it.
+
+`EFFORT_LEVELS` in `models.mjs` is deliberately a wide list, used only for the MCP tool schema; the real filtering happens in `validateEffort()` against the catalog's `supported_reasoning_efforts`. As with models, the check is skipped when the catalog is incomplete: better to let a questionable value through than to reject a working one.
+
+`explainCodexFailure()` in `codex-core.mjs` additionally turns the API response into an actionable message, pulling the supported values out of the error text. `denoise()` strips Codex's own housekeeping lines (chiefly its internal model-cache mismatch) so they can't mask the real cause.
+
+### Background job manager
+
+A state machine with no backward transitions:
 
 ```
 running ──► done | failed | cancelled | timeout | unknown
 ```
 
-Терминальные статусы неизменяемы. Это не украшение: раньше `cancelJob()` писал `cancelled`, а сработавший позже `child.on("exit")` перезаписывал статус на `done` — отменённая задача выглядела успешно выполненной.
+Terminal states are immutable. This isn't decoration: `cancelJob()` used to write `cancelled`, and a later `child.on("exit")` would overwrite it with `done` — a cancelled job looked like a successful one.
 
-Источник истины о завершении — **файл с кодом возврата**, а не событие в родительском процессе. Задача запускается через `/bin/sh`, который перенаправляет вывод и атомарно пишет `$?` в отдельный файл:
+The source of truth for completion is an **exit-code file**, not an event in the parent process. Jobs launch through `/bin/sh`, which redirects output and atomically writes `$?` to a separate file:
 
 ```
 sh -c 'BIN="$1"; PROMPT="$2"; OUT="$3"; CODE="$4"; shift 4;
@@ -90,121 +107,121 @@ sh -c 'BIN="$1"; PROMPT="$2"; OUT="$3"; CODE="$4"; shift 4;
        printf %s "$?" > "$CODE.tmp" && mv "$CODE.tmp" "$CODE"'
 ```
 
-Пути и промпт передаются позиционными аргументами, а не подстановкой в строку команды — шелл-инъекция невозможна. Такой подход даёт три вещи, которых не было у обработчика `exit`: код возврата переживает перезапуск MCP-сервера, дескрипторы не текут (редирект делает сам `sh`, родитель открывает `stdio: ignore`), и нет гонки с отменой.
+Paths and the prompt are passed as positional arguments rather than interpolated into a command string, so shell injection is impossible. This buys three things the `exit` handler never had: the exit code survives an MCP server restart, file descriptors don't leak (`sh` does the redirect; the parent opens `stdio: ignore`), and there's no race with cancellation.
 
-Процесс, исчезнувший без записи кода возврата, получает `unknown`, а не `done`: считать успехом то, о чём ничего не известно, — худший из вариантов.
+A process that vanishes without writing an exit code gets `unknown`, not `done`: treating the unknown as success is the worst available option.
 
-### Идентификаторы задач
+### Job identifiers
 
-`job_id` приходит от модели, поэтому проходит жёсткую валидацию `/^job-[0-9a-f]{8}$/` плюс проверку containment после `path.resolve()`. Единственная точка, где идентификатор превращается в путь, — `jobPath()`. Без этого `../../outside-job` читал файлы за пределами каталога задач и позволял передать чужой PID в `kill`.
+`job_id` arrives from the model, so it goes through strict `/^job-[0-9a-f]{8}$/` validation plus a containment check after `path.resolve()`. The single place an identifier becomes a path is `jobPath()`. Without this, `../../outside-job` read files outside the jobs directory and let an arbitrary PID reach `kill`.
 
-### Редактирование `config.toml`
+### Editing `config.toml`
 
-Файл принадлежит пользователю, поэтому все правки — только внутри маркированного блока. Тонкости, каждая из которых была багом:
+The file belongs to the user, so every edit stays inside a marked block. Each of these subtleties was a bug:
 
-- **Замена через функцию.** `str.replace(re, block)` интерпретирует `$&`, `$1`, `$'` в строке замены: путь плагина с `$&` вставлял внутрь результата старый блок. Только `replace(re, () => block)`.
-- **Экранирование маркеров.** `# >>> codex-bridge (claude) >>>` содержит скобки — в `RegExp` идёт только через `esc()`, иначе блок не находится никогда, а повторный `--link-back` плодит дубликаты.
-- **Глобальная регулярка.** Блоков могло накопиться несколько; `unlink()` удаляет все.
-- **Экранирование TOML-строки.** Кавычка в пути ломала файл. `tomlString()` экранирует `\`, `"` и управляющие символы.
-- **Конфликт.** Если у пользователя уже есть неуправляемая `[mcp_servers.claude-bridge]`, вторая таблица сделает TOML невалидным — операция отклоняется, файл не трогается.
-- **Атомарность.** Запись во временный файл и `rename`.
+- **Replace via a function.** `str.replace(re, block)` interprets `$&`, `$1`, `$'` in the replacement string: a plugin path containing `$&` injected the old block into the result. Only `replace(re, () => block)` is safe.
+- **Escaping the markers.** `# >>> codex-bridge (claude) >>>` contains parentheses — it goes into a `RegExp` only through `esc()`, otherwise the block is never found and a repeated `--link-back` piles up duplicates.
+- **Global regex.** Several blocks could accumulate; `unlink()` removes all of them.
+- **TOML string escaping.** A quote in the path broke the file. `tomlString()` escapes `\`, `"`, and control characters.
+- **Conflicts.** If the user already has an unmanaged `[mcp_servers.claude-bridge]`, adding a second table would make the TOML invalid — the operation is refused and the file left untouched.
+- **Atomicity.** Write to a temp file, then rename.
 
-### Самолечение пути моста
+### Bridge path self-healing
 
-`${CLAUDE_PLUGIN_ROOT}` меняется при каждом обновлении плагина, а каталог старой версии удаляется примерно через 14 дней. Записанный один раз путь в `config.toml` тихо устарел бы после `/plugin update`, а затем отвалился. `ensureFresh()` в `SessionStart`-хуке сверяет записанный путь с актуальным и переписывает при расхождении.
+`${CLAUDE_PLUGIN_ROOT}` changes on every plugin update, and the previous version's directory is removed after roughly 14 days. A path written once into `config.toml` would silently go stale after `/plugin update` and then break. `ensureFresh()` in the `SessionStart` hook compares the recorded path against the current one and rewrites it on mismatch.
 
-### Ограничение инструментов в `claude_task`
+### Tool restriction in `claude_task`
 
-`--allowedTools` **не ограничивает** набор инструментов — он лишь снимает запрос подтверждения. Ограничивает доступность `--tools`. Это была реальная ошибка: административный allowlist `["Read"]` обходился одним аргументом от Codex.
+`--allowedTools` does **not** restrict the tool set — it only skips the confirmation prompt. `--tools` is what limits availability. This was a real bug: an administrative allowlist of `["Read"]` could be bypassed with a single argument from Codex.
 
-`resolveTools()` считает пересечение запрошенного набора с настроенным потолком: сузить можно, расширить нет. Пустое пересечение — не повод запустить Claude без инструментов, а причина отказа с объяснением. При `write: false` инструменты записи вырезаются принудительно и дублируются в `--disallowedTools`.
+`resolveTools()` intersects the requested set with the configured ceiling: narrowing is allowed, widening is not. An empty intersection isn't a reason to launch Claude with no tools — it's a refusal with an explanation. With `write: false`, write tools are stripped unconditionally and duplicated into `--disallowedTools`.
 
-### Проброс MCP-инструментов
+### MCP tool proxying
 
-`tool-proxy.mjs` поднимает разрешённые серверы через `mcp-client.mjs`, читает их `tools/list` и переэкспортирует под именем `<alias>__<tool>`. Падение одного сервера не ломает остальные.
+`tool-proxy.mjs` starts the allowed servers through `mcp-client.mjs`, reads their `tools/list`, and re-exports them as `<alias>__<tool>`. One server failing doesn't break the others.
 
-Обнаружение серверов следует precedence Claude Code: **local → project → user**, первый выигрывает. Порядок важен: раньше выбирался user-сервер, перекрывая локальную настройку разработчика.
+Server discovery follows Claude Code precedence: **local → project → user**, first match wins. The order matters: previously the user-scope server was picked, overriding a developer's local setting.
 
-Переменные окружения хранятся в allowlist **только как ссылки** `${VAR}` / `${VAR:-default}` — `sanitizeEnv()` отбрасывает литеральные значения, чтобы чужие токены не оказались в файле плагина. Раскрытие происходит при запуске сервера.
+Environment variables are stored in the allowlist **only as references** — `${VAR}` / `${VAR:-default}`. `sanitizeEnv()` drops literal values so other people's tokens never land in a plugin file. Expansion happens at server launch.
 
-### Генерация изображений
+### Image generation
 
-Codex без явного запрета склонен вместо встроенного `image_gen` написать Python- или Node-скрипт к платному Images API. Промпт в `buildPrompt()` закрывает этот путь тремя отдельными формулировками, а `generateImage()` распознаёт срыв по выводу (`OPENAI_API_KEY`, `api.openai.com`, `images/generations`) и говорит об этом прямо.
+Without an explicit prohibition, Codex tends to write a Python or Node script against the paid Images API instead of using the built-in `image_gen`. The prompt in `buildPrompt()` closes that path with three separate statements, and `generateImage()` detects the slip from the output (`OPENAI_API_KEY`, `api.openai.com`, `images/generations`) and says so plainly.
 
-Результат принимается только после проверок:
+A result is accepted only after these checks:
 
-1. код возврата Codex — **до** поиска файлов, иначе подберём чужой артефакт;
-2. `sniffImage()` — magic bytes PNG/JPEG/GIF/WebP, а не расширение и не слова Codex;
-3. `resolveInside()` — `out_dir` и референсы не выходят за корень проекта, абсолютные пути запрещены;
-4. `acceptableSource()` — путь из строки `SAVED:` принимается только изнутри проекта или `$CODEX_HOME/generated_images/`.
+1. Codex's exit code — **before** looking for files, otherwise an unrelated artifact gets picked up;
+2. `sniffImage()` — PNG/JPEG/GIF/WebP magic bytes, not the extension and not Codex's word for it;
+3. `resolveInside()` — `out_dir` and references stay within the project root; absolute paths are refused;
+4. `acceptableSource()` — a path from a `SAVED:` line is accepted only from inside the project or `$CODEX_HOME/generated_images/`.
 
-Fallback-поиск свежего файла в каталоге Codex тоже фильтрует по сигнатуре.
+The fallback scan of Codex's output directory filters by signature too.
 
-### Каталог моделей
+### Model catalog
 
-`codex debug models` → парсинг с сужением среза с обеих сторон (каталог бывает окружён служебными строками) → кэш на 6 часов.
+`codex debug models` → parsing that narrows the slice from both ends (the catalog is sometimes wrapped in notice text) → a 6-hour cache.
 
-При недоступности подкоманды — деградация на `model` из `config.toml`, затем на устаревший кэш. Такой каталог помечается `complete: false`, и `knownModel()` по нему **не блокирует** незнакомые модели: иначе отклонялись бы вполне рабочие имена.
+If the subcommand is unavailable, it degrades to `model` from `config.toml`, then to a stale cache. Such a catalog is flagged `complete: false`, and `knownModel()` **does not block** unknown models against it — otherwise perfectly valid names would be rejected.
 
-### MCP-транспорт
+### MCP transport
 
-`mcp-lib.mjs` объявляет поддерживаемые версии явно (`2025-06-18`, `2025-03-26`) и отвечает запрошенной, только если умеет её; иначе своей. Битый JSON даёт `-32700 Parse error`, а не молчание. Наружу уходит только сообщение об ошибке — stack trace пишется в stderr, чтобы не раскрывать пути и внутреннее устройство.
+`mcp-lib.mjs` declares its supported versions explicitly (`2025-06-18`, `2025-03-26`) and echoes the requested one only when it supports it; otherwise it answers with its own. Malformed JSON yields `-32700 Parse error` rather than silence. Only the error message goes to the client — stack traces are written to stderr so paths and internals aren't exposed.
 
-Батчи JSON-RPC отклоняются осознанно: они удалены из MCP в ревизии 2025-06-18, которую сервер и объявляет.
+JSON-RPC batches are rejected deliberately: they were removed from MCP in revision 2025-06-18, which is what the server advertises.
 
-`mcp-client.mjs` реагирует на `exit`/`close` вложенного сервера немедленным отказом всех ожидающих запросов и сохраняет хвост его stderr — без этого вызов после смерти сервера висел до полного таймаута, а причина сбоя терялась.
+`mcp-client.mjs` responds to a nested server's `exit`/`close` by failing all pending requests immediately and keeps the tail of its stderr — without this, a call after the server died hung for the full timeout and the cause was lost.
 
 ---
 
-## Тесты
+## Tests
 
 ```bash
 node tests/regressions.mjs
 ```
 
-27 тестов, по одному на каждый известный дефект. Настоящие `codex` и `claude` не нужны: тест сам создаёт заглушки во временном каталоге, поведение которых задаётся переменными окружения.
+27 tests, one per known defect. Real `codex` and `claude` binaries aren't needed: the suite creates its own stubs in a temp directory, driven by environment variables.
 
-Покрыто: определение флагов, терминальные статусы задач, код возврата после перезапуска, утечка дескрипторов, path traversal в `job_id`, обход allowlist инструментов, принудительный read-only, подмена изображения произвольным файлом, containment путей, порча `config.toml` (`$&`, кавычки, дубликаты, конфликты), обработка ненулевого кода возврата, права файлов и отбрасывание секретов, деградация каталога моделей, разбор аргументов `setup`, precedence MCP, version negotiation, parse error, утечка stack trace, реакция на смерть вложенного сервера.
+Covered: flag detection, terminal job states, exit code across restarts, descriptor leaks, `job_id` path traversal, tool allowlist bypass, forced read-only, an arbitrary file passed off as an image, path containment, `config.toml` corruption (`$&`, quotes, duplicates, conflicts), non-zero exit handling, file permissions and secret stripping, model catalog degradation, `setup` argument parsing, MCP precedence, version negotiation, parse errors, stack trace leakage, and reaction to a nested server dying.
 
-Тест утечки дескрипторов требует `/proc` и на не-Linux молча пропускается.
+The descriptor-leak test needs `/proc` and is silently skipped on non-Linux.
 
-При добавлении функциональности добавляйте тест туда же — файл намеренно один и без раннера, чтобы не заводить зависимости.
+When adding functionality, add the test in the same file — it's deliberately a single file with no runner, to avoid pulling in dependencies.
 
 ---
 
-## Публикация
+## Publishing
 
-Репозиторий одновременно является плагином и маркетплейсом из одного плагина: `.claude-plugin/marketplace.json` лежит в корне, его единственная запись указывает `"source": "."` — на сам корень.
+The repository is simultaneously the plugin and a single-plugin marketplace: `.claude-plugin/marketplace.json` sits at the root and its only entry points at `"source": "."` — the root itself.
 
 ```bash
 claude plugin validate . --strict
 ```
 
-Проверяет манифест, фронтматтер команд и агентов, `hooks.json`. Флаг `--strict` превращает предупреждения в ошибки — полезно в CI.
+This checks the manifest, command and agent frontmatter, and `hooks.json`. `--strict` turns warnings into errors, which is useful in CI.
 
-### Версионирование
+### Versioning
 
-В `plugin.json` задано `"version"`. Пока поле установлено, пользователи получают обновления **только после его повышения**: новых коммитов недостаточно, Claude Code видит ту же строку версии и оставляет закэшированную копию.
+`plugin.json` sets `"version"`. While that field is present, users receive updates **only after you bump it**: new commits aren't enough, Claude Code sees the same version string and keeps the cached copy.
 
-На этапе активной разработки поле можно удалить — тогда версией станет SHA коммита и обновления пойдут с каждым пушем.
+During active development you can drop the field — the commit SHA then becomes the version and updates ship with every push.
 
-Версия в `plugin.json` и в `serve({ version })` обоих MCP-серверов должна совпадать.
+The version in `plugin.json` and in `serve({ version })` of both MCP servers must match.
 
-### Несколько плагинов в репозитории
+### Multiple plugins in one repository
 
-Если появятся другие плагины, перенесите текущий в `plugins/codex-bridge/` и поменяйте `source` на `"./plugins/codex-bridge"`. Пути в записях разрешаются относительно каталога, содержащего `.claude-plugin/`.
+If other plugins appear, move this one to `plugins/codex-bridge/` and change `source` to `"./plugins/codex-bridge"`. Entry paths resolve relative to the directory containing `.claude-plugin/`.
 
 ---
 
-## Отладка
+## Debugging
 
 ```bash
-claude --plugin-dir /путь/к/claude-codex-bridge   # запуск без установки
-claude --debug                             # загрузка плагина, инициализация MCP
-/codex-bridge:setup                               # диагностика окружения
+claude --plugin-dir /path/to/claude-codex-bridge   # run without installing
+claude --debug                              # plugin loading, MCP init
+/codex-bridge:setup                                # environment diagnostics
 ```
 
-MCP-сервер можно позвать напрямую:
+You can talk to an MCP server directly:
 
 ```bash
 printf '%s\n' \
@@ -213,23 +230,23 @@ printf '%s\n' \
   | node scripts/mcp-codex.mjs
 ```
 
-Обратный мост — так же, `node bridge/mcp-claude.mjs`; он читает allowlist из `CODEX_BRIDGE_EXPOSED` (по умолчанию `~/.codex/codex-bridge/exposed.json`).
+The reverse bridge works the same way via `node bridge/mcp-claude.mjs`; it reads its allowlist from `CODEX_BRIDGE_EXPOSED` (default `~/.codex/codex-bridge/exposed.json`).
 
-Полезные переменные окружения для тестов и отладки: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `CODEX_BRIDGE_CONFIG`, `CODEX_BRIDGE_EXPOSED`, `CODEX_HOME`.
+Useful environment variables for tests and debugging: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `CODEX_BRIDGE_CONFIG`, `CODEX_BRIDGE_EXPOSED`, `CODEX_HOME`.
 
 ---
 
-## Непроверенные допущения
+## Unverified assumptions
 
-Честный список того, что не проверялось на живых бинарях:
+An honest list of what has never been checked against live binaries:
 
-1. **Ограничения `aspect_ratio` / `image_resolution`** (`auto` только с `1K`, `1:1` без `4K`) взяты из документации стороннего API и для встроенного `image_gen` не подтверждены. Могут отклонять допустимые параметры — снимаются двумя строками в `validate()` в `image-core.mjs`.
-2. **Формат вывода `codex debug models`** разбирается терпимо (`parseCatalog()`), но на реальном выводе не проверялся.
-3. **Точный набор флагов `codex exec`** определяется по `--help`; парсинг help-текста регулярками сам по себе допущение.
-4. **Поведение `claude -p --tools`** проверено по документации, не на реальном бинаре.
+1. **The `aspect_ratio` / `image_resolution` constraints** (`auto` only with `1K`, `1:1` without `4K`) come from a third-party API's documentation and are unconfirmed for the built-in `image_gen`. They may reject valid parameters — two lines in `validate()` in `image-core.mjs` remove them.
+2. **The output format of `codex debug models`** is parsed leniently (`parseCatalog()`), but has never been tested against real output.
+3. **The exact `codex exec` flag set** is detected from `--help`; parsing help text with regexes is itself an assumption.
+4. **The behaviour of `claude -p --tools`** was verified from documentation, not against a real binary.
 
-Первый прогон на настоящем окружении должен идти по возрастанию риска: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
+A first run in a real environment should proceed in order of increasing risk: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
 
-## Вклад
+## Contributing
 
-Правки принимаются с тестом на исправляемое поведение. Изменения, затрагивающие безопасность (allowlist инструментов, containment путей, права файлов, редактирование `config.toml`), должны сопровождаться тестом, который падает без правки.
+Patches are accepted with a test for the behaviour being fixed. Changes touching security (tool allowlists, path containment, file permissions, `config.toml` editing) must come with a test that fails without the fix.

@@ -2,11 +2,11 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",
-    "url": "https://github.com/VlDubr/claude-codex-bridge"
+    "url": "https://github.com/VlDubr"
   },
   "license": "MIT",
   "keywords": [
@@ -30,7 +30,7 @@
     "default_effort": {
       "type": "string",
       "title": "Reasoning effort по умолчанию",
-      "description": "minimal | low | medium | high. Пусто — дефолт Codex.",
+      "description": "Уровень reasoning. Набор зависит от модели — точный список показывает /codex-bridge:models. Значение minimal принимают только модели прошлых поколений; gpt-5.6 и новее его отвергают.",
       "required": false
     },
     "job_timeout_minutes": {
@@ -55,6 +55,13 @@
       "default": 15,
       "min": 2,
       "max": 60
+    },
+    "bypass_sandbox": {
+      "type": "boolean",
+      "title": "Обходить песочницу Codex (аварийный режим)",
+      "description": "Включайте только если песочница Codex сломана рассинхроном версий и /codex-bridge:setup это подтверждает. Codex будет выполнять команды без изоляции. Правильное решение — переустановить Codex.",
+      "default": false,
+      "required": false
     }
   },
   "homepage": "https://github.com/VlDubr/claude-codex-bridge",

@@ -9,8 +9,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CONFIG_PATH =
-  process.env.CODEX_BRIDGE_CONFIG || path.join(os.homedir(), ".codex", "config.toml");
+const envClean = (n) => {
+  const v = process.env[n];
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return !t || /^\$\{.*\}$/.test(t) ? undefined : t;
+};
+
+export const CONFIG_PATH = envClean("CODEX_BRIDGE_CONFIG") || path.join(os.homedir(), ".codex", "config.toml");
 
 const MARK_START = "# >>> codex-bridge (claude) >>>";
 const MARK_END = "# <<< codex-bridge (claude) <<<";
@@ -21,7 +27,7 @@ const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const blockRe = () => new RegExp(`\\n?${esc(MARK_START)}[\\s\\S]*?${esc(MARK_END)}\\n?`, "g");
 
 export function pluginRoot() {
-  return process.env.CLAUDE_PLUGIN_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  return envClean("CLAUDE_PLUGIN_ROOT") || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
 export function bridgePath(root = pluginRoot()) {
