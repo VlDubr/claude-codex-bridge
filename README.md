@@ -1,285 +1,218 @@
 # Codex Bridge
 
-Плагин для Claude Code, встраивающий Codex (ChatGPT) в рабочий процесс: ревью,
-состязательное ревью, делегирование задач, фоновые джобы — и, главное,
-**двусторонний обмен**: Claude может советоваться с GPT, а GPT — с Claude.
+[Русский](README.ru.md) · **English**
 
-## Требования
+A Claude Code plugin that brings Codex (ChatGPT) into your workflow — so you stop switching between two terminals and copying code from one window to the other.
 
-- Claude Code **2.1.154+** (используются `displayName` и `defaultEnabled`)
-- Node.js **20.11+** или **21.2+**
-- Codex CLI, авторизованный через `codex login`
+Code review, adversarial review, task delegation, image generation. And the part nothing else does: **the exchange runs both ways**. Claude can consult GPT, and GPT can consult Claude. They can argue, critique each other's decisions, and hand work back and forth.
 
-## Установка
+Everything runs on subscriptions you already have. No API keys.
 
-Плагин ставится **выключенным** (`defaultEnabled: false`): он обращается к
-внешнему сервису, расходует лимиты подписки ChatGPT и расширяет набор доступных
-инструментов, поэтому включение — осознанное действие.
+---
 
-```bash
-npm install -g @openai/codex   # если Codex ещё не стоит
-codex login                    # OAuth-вход через аккаунт ChatGPT
+## Why
+
+Two models have different blind spots. A decision one finds obvious, the other will often tear apart — and frequently it has a point. But using that normally means shuttling text between two windows by hand, losing context on every hop.
+
+Codex Bridge removes the hop. When Claude hits a contested architectural decision, it asks GPT on its own, without you typing a command. When GPT works through unfamiliar code, it reaches out to Claude. You see both positions and exactly where they diverge.
+
+```
+                       ┌──────────────┐
+   /codex:ask          │              │        claude_ask
+   /codex:review   ───►│    Codex     │◄───    claude_critique
+   /codex:delegate     │    Bridge    │        claude_task
+   Claude Code     ◄───│              │───►    Codex CLI
+   results             └──────────────┘        proxied MCP tools
 ```
 
-В сессии Claude Code:
+---
+
+## Features
+
+### Code review
+
+| | |
+|---|---|
+| **Standard review** | GPT works through your current changes: blockers, bugs, races, unhandled errors — with file and line |
+| **Adversarial review** | Doesn't hunt for typos, it challenges the decision: which assumptions went unverified, which failure mode was missed, whether a simpler path exists |
+
+### Task delegation
+
+Describe the bug — GPT diagnoses the cause itself, makes the smallest safe change, and runs the tests. It works in the background: kick it off and carry on with your own task.
+
+```
+/codex:delegate the auth_spec tests started failing after the main merge, dig in
+/codex:status      # still running?
+/codex:result      # what came out
+/codex:cancel      # changed my mind
+```
+
+### Two models working together
+
+```
+/codex:ask     should this cache move to Redis or is in-memory enough
+/codex:debate  retry strategy for the payment webhook
+```
+
+`/codex:debate` runs a structured argument over several rounds: Claude states a position, GPT challenges it, Claude answers the strongest objection. It closes with what both sides accepted, where they still disagree, and which experiment would settle it. Agreement is never faked: two diverging opinions are more useful than one averaged out.
+
+### Image generation
+
+```
+/codex:image --ar 16:9 --res 2K landing page banner, dark background, isometric
+/codex:image --ref designs/palette.png settings icon in the reference style
+```
+
+Rendered by gpt-image-2 through Codex's built-in tool — on your ChatGPT subscription, no API key. After generating, Claude **opens the image and looks at it**: it checks against criteria written down beforehand and, on a mismatch, refines the prompt and regenerates. A "success" response from the model says nothing about what was actually drawn.
+
+### The reverse bridge
+
+After `/codex:setup --link-back`, GPT gets tools of its own:
+
+- **`claude_ask`, `claude_critique`** — ask Claude's opinion, have it critique a plan before you apply it
+- **`claude_task`** — hand a task to Claude Code with all of its tools
+- **MCP proxying** — tools from your MCP servers (issue tracker, database, docs) become directly available to GPT
+
+---
+
+## Requirements
+
+- **Claude Code** 2.1.154 or newer
+- **Node.js** 20.11+ (or 21.2+)
+- **Codex CLI** with a ChatGPT subscription — any tier works, including Free
+
+## Installation
+
+```bash
+npm install -g @openai/codex   # if Codex isn't installed yet
+codex login                    # OAuth sign-in with your ChatGPT account
+```
+
+Then, inside a Claude Code session:
 
 ```
 /plugin marketplace add VlDubr/codex-bridge
 /plugin install codex-bridge@codex-tools
 /reload-plugins
 /plugin enable codex-bridge
+```
+
+Check that everything is in place:
+
+```
+/codex:setup
+```
+
+It reports the Codex version, auth state, available models, and the image output directory. If something is missing, it tells you exactly what.
+
+> The plugin installs **disabled**. It spends your ChatGPT subscription limits and widens the available tool surface, so enabling it is a deliberate act rather than a side effect of installing.
+
+## Configuration
+
+On enable, Claude Code prompts for a few values — all optional:
+
+| Setting | What it controls |
+|---|---|
+| `default_model` | Default Codex model. See `/codex:models` for the list |
+| `default_effort` | Reasoning level: `minimal`, `low`, `medium`, `high` |
+| `job_timeout_minutes` | When to kill a stuck background job (default 30) |
+| `image_output_dir` | Where images go (default `assets/generated`) |
+| `image_timeout_minutes` | Image generation timeout (default 15) |
+
+### The GPT → Claude bridge
+
+Off by default. One command turns it on:
+
+```
 /codex:setup --link-back
 ```
 
-Для разработки без установки: `claude --plugin-dir /путь/к/codex-bridge`.
+It adds an MCP server to `~/.codex/config.toml`. Restart Codex and GPT gains `claude_ask` and `claude_critique`. To remove it: `/codex:setup --unlink-back`.
 
-## Публикация
-
-Репозиторий одновременно является плагином и маркетплейсом из одного плагина:
-`.claude-plugin/marketplace.json` лежит в корне, а его единственная запись
-указывает `"source": "."` — то есть на сам корень репозитория.
-
-```bash
-claude plugin validate . --strict
-```
-
-**Версионирование.** В `plugin.json` задано `"version": "0.1.0"`. Пока поле
-установлено, пользователи получают обновления только после его повышения:
-новых коммитов недостаточно, Claude Code видит ту же строку версии и оставляет
-закэшированную копию. Если хотите, чтобы обновления прилетали с каждым коммитом,
-удалите поле `version` — тогда версией станет SHA коммита.
-
-Если позже появятся другие плагины, перенесите текущий в `plugins/codex-bridge/`
-и поменяйте `source` на `"./plugins/codex-bridge"`; пути в записях
-разрешаются относительно каталога, содержащего `.claude-plugin/`.
-
-## Команды
-
-| Команда | Что делает |
-|---|---|
-| `/codex:review [--base main] [--now]` | Обычное ревью текущих изменений |
-| `/codex:challenge <что оспорить>` | Состязательное ревью: оспаривает дизайн |
-| `/codex:delegate <задача>` | GPT исследует и чинит сам, с правом менять файлы |
-| `/codex:status [id]` | Статус фоновых задач |
-| `/codex:result [id]` | Финальный вывод завершённой задачи |
-| `/codex:cancel [id]` | Отмена выполняющейся задачи |
-| `/codex:ask <вопрос>` | Синхронное второе мнение от GPT |
-| `/codex:debate <тема>` | Структурированный спор Claude ↔ GPT в несколько кругов |
-| `/codex:image <описание>` | Генерация изображения gpt-image-2 с проверкой результата |
-| `/codex:models [--refresh]` | Модели, реально доступные в этом Codex |
-| `/codex:setup [--link-back]` | Диагностика и подключение обратного моста |
-
-## Как устроена авторизация
-
-Плагин не реализует OAuth сам и не хранит токенов. Вход выполняется штатной
-командой `codex login`, плагин работает поверх локальной сессии Codex CLI —
-той же, что используется при прямом запуске `codex`. Это же означает, что
-расход идёт по лимитам вашей подписки ChatGPT, отдельно от подписки Claude.
-
-## Двусторонний обмен
-
-**Claude → GPT.** MCP-сервер `codex` даёт Claude инструменты `codex_ask`,
-`codex_review`, `codex_challenge`, `codex_delegate`, `codex_status`,
-`codex_result`, `codex_cancel`. Claude вызывает их сам по ходу задачи, без
-слэш-команды: например, наткнувшись на спорное архитектурное решение.
-
-**GPT → Claude.** `/codex:setup --link-back` прописывает MCP-сервер
-`claude-bridge` в `~/.codex/config.toml`. После этого у GPT появляется три
-класса инструментов.
-
-*1. Консультации* — `claude_ask` и `claude_critique`, поверх `claude -p` в
-plan-режиме. Доступны сразу, ничего не меняют.
-
-*2. Делегирование* — `claude_task`: GPT поручает задачу Claude Code, у которого
-есть его собственные инструменты. По умолчанию только чтение; правка файлов —
-через параметр `write`. Выключено по умолчанию:
+Reverse delegation is enabled separately, with an explicit tool ceiling:
 
 ```
-/codex:setup --allow-task --task-tools Read,Grep,Glob,Bash
-/codex:setup --deny-task
+/codex:setup --allow-task --task-tools Read,Grep,Glob
 ```
 
-`--task-tools` — административный потолок, а не подсказка. Набор передаётся
-Claude флагом `--tools`, который ограничивает доступность инструментов
-(в отличие от `--allowedTools`, лишь снимающего запрос подтверждения). Если GPT
-передаёт свой `allowed_tools`, итоговый набор — пересечение с этим потолком:
-сузить может, расширить нет. Запрос за пределы потолка отклоняется с
-объяснением, а не выполняется молча. При `write: false` инструменты записи
-(`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash`) вырезаются принудительно
-и дублируются в `--disallowedTools`.
+### Proxying MCP tools
 
-*3. Проброс MCP-инструментов* — инструменты ваших MCP-серверов Claude
-появляются у GPT напрямую, под именами `<сервер>__<инструмент>`. Мост сам
-подключается к ним как MCP-клиент и переэкспортирует:
+See what's connected to Claude, then expose what you want:
 
 ```
-/codex:setup --expose-list                          # что вообще есть
+/codex:setup --expose-list
 /codex:setup --expose tracker --tools list_issues,create_issue
 /codex:setup --unexpose tracker
 ```
 
-Ничего не пробрасывается без явного разрешения: allowlist лежит в
-`~/.codex/codex-bridge/exposed.json` (права `0600`, каталог `0700`) и создаётся
-только этими командами. Переменные окружения копируются **только как ссылки**
-`${VAR}` и `${VAR:-default}`, раскрываемые при запуске сервера; литеральные
-значения не сохраняются, чтобы чужие токены не оказались в файле плагина, —
-о таких переменных `--expose` предупреждает отдельно.
-Параметр `--tools` ограничивает набор до перечисленных — остальные инструменты
-сервера не попадают ни в `tools/list`, ни в маршрутизацию.
+Only what you list is proxied. A tool left out of `--tools` simply does not exist as far as GPT is concerned.
 
-Ограничения проброса: поддерживаются только stdio-серверы. HTTP/SSE-серверы с
-собственной OAuth-авторизацией мост не тянет — их проще зарегистрировать в
-`~/.codex/config.toml` напрямую, у Codex свой MCP-клиент. `--expose-list`
-показывает транспорт каждого сервера и помечает неподдерживаемые.
+---
 
-Встроенные инструменты Claude (Read, Edit, Bash, Glob, Grep) намеренно не
-пробрасываются: у Codex есть свои эквиваленты, и дублировать их означало бы
-гонять файловые операции через лишний процесс. Всё, что требует именно
-поведения Claude, идёт через `claude_task`.
+## Commands
 
-Изменения в allowlist подхватываются при перезапуске Codex.
-
-**Обновления плагина.** `${CLAUDE_PLUGIN_ROOT}` меняется при каждом обновлении,
-поэтому путь к мосту, записанный в `config.toml`, устарел бы после `/plugin update`
-и перестал работать примерно через две недели, когда каталог старой версии
-удаляется. `SessionStart`-хук сверяет записанный путь с актуальным и чинит его
-сам, сообщая об этом в stderr. Ручное вмешательство не требуется.
-
-## Генерация изображений
-
-Рисует **встроенный инструмент Codex `image_gen`** (модель gpt-image-2). Он
-работает на той же ChatGPT-авторизации, что и остальной Codex: HTTP-запросов
-мимо Codex нет, API-ключ не нужен, расход идёт по лимитам подписки.
-
-```
-/codex:image --ar 16:9 --res 2K баннер для лендинга, тёмный фон, изометрия
-/codex:image --ref designs/palette.png --out public/img иконка настроек в стиле референса
-```
-
-**Как это устроено.** Плагин запускает `codex exec` с промптом, который жёстко
-предписывает использовать встроенный инструмент и запрещает писать скрипты,
-обращаться к внешним API и использовать `OPENAI_API_KEY`. Без такого запрета
-Codex склонен добросовестно сгенерировать скрипт к платному Images API — это
-известное поведение, и оно стоит денег. Если оно всё же случилось, плагин
-распознаёт это по выводу и говорит об этом прямо, вместо того чтобы вернуть
-невнятную ошибку.
-
-Результат забирается в трёх вариантах: файл сразу по целевому пути; путь,
-объявленный Codex строкой `SAVED:`; свежий файл в `$CODEX_HOME/generated_images/`,
-куда встроенный инструмент кладёт результат по умолчанию. Во всех случаях файл
-оказывается в каталоге проекта.
-
-**Проверка результата** — часть цикла, а не опция. После генерации Claude
-открывает файл инструментом `Read`, сверяет с выписанными заранее критериями и
-при расхождении правит промпт и генерирует заново (до двух повторов). Отключается
-флагом `--no-check`. Для длинного цикла есть субагент `@codex-bridge:image-smith`.
-
-| Параметр | Значения |
+| Command | What it does |
 |---|---|
-| `prompt` | обязателен, до 20 000 символов |
-| `aspect_ratio` | `1:1`, `9:16`, `16:9`, `4:3`, `3:4`, `auto` (по умолчанию `auto`) |
-| `image_resolution` | `1K`, `2K`, `4K` (по умолчанию `1K`) |
-| `images` | 0–16 референсов, **только локальные пути** (передаются флагом `--image`) |
+| `/codex:review [--base main] [--now]` | Review current changes |
+| `/codex:challenge <what to challenge>` | Adversarial review: challenges the design |
+| `/codex:delegate <task>` | GPT investigates and fixes it, with write access |
+| `/codex:status [id]` | Background job status |
+| `/codex:result [id]` | Output of a finished job |
+| `/codex:cancel [id]` | Cancel a running job |
+| `/codex:ask <question>` | A second opinion from GPT, right now |
+| `/codex:debate <topic>` | Multi-round Claude ↔ GPT argument |
+| `/codex:image <description>` | gpt-image-2 image with result verification |
+| `/codex:models [--refresh]` | Models actually available in this Codex |
+| `/codex:setup [flags]` | Diagnostics, reverse bridge, tool proxying |
 
-Несовместимые сочетания (`auto` только с `1K`, `1:1` без `4K`) проверяются
-локально, до запуска Codex. **Эти ограничения не подтверждены для встроенного
-`image_gen`**: они взяты из документации стороннего API и могут отклонять
-допустимые параметры. Если столкнётесь — снимаются двумя строками в `validate()`
-в `scripts/image-core.mjs`. Генерация занимает 4–6 минут, при 4K дольше;
-таймаут настраивается полем `image_timeout_minutes`.
+Slash commands aren't the only entry point. Claude reaches for the same capabilities on its own when the context calls for it. There are subagents too: `@codex-bridge:gpt-advisor` for a second opinion, `@codex-bridge:gpt-delegate` for handing off work, `@codex-bridge:image-smith` for a longer generate-and-verify loop.
 
-## Модели
-
-Список моделей плагин **спрашивает у Codex**, а не хранит зашитым:
-
-```
-/codex:models            # что доступно в этом окружении
-/codex:models --refresh  # перечитать каталог
-```
-
-Источник — `codex debug models`, каталог после слияния всех слоёв конфигурации.
-Результат кэшируется на 6 часов в данных плагина. Если подкоманда недоступна,
-плагин откатывается на `model` из `config.toml`, а затем на устаревший кэш, и
-честно помечает такой список как неполный.
-
-Имя модели, переданное в инструменты сервера `codex`, сверяется с каталогом:
-опечатка отклоняется сразу со списком доступных вариантов. Сверка выполняется
-только когда каталог получен от `codex debug models` целиком; при деградации на
-`config.toml` каталог помечается неполным и проверка пропускается, иначе
-отклонялись бы вполне рабочие модели. `image_generate` сверку не выполняет —
-там модель лишь ведёт сессию, а рисует в любом случае gpt-image-2.
-
-Выбор конкретной модели — на трёх уровнях:
-
-1. Per-call: аргумент `model` у любого инструмента, флаг `--model` у команд.
-2. Умолчание плагина: поля `default_model` / `default_effort`, которые
-   Claude Code спрашивает при включении плагина.
-3. Умолчание Codex: `model` и `model_reasoning_effort` в `~/.codex/config.toml`
-   или в `.codex/config.toml` в корне проекта.
-
-Субагенты `gpt-delegate` и `gpt-advisor` доступны через `@codex-bridge:gpt-advisor`
-и вызываются Claude автоматически по контексту задачи.
-
-## Структура
+## Models
 
 ```
-codex-bridge/
-├── .claude-plugin/plugin.json     манифест + userConfig
-├── .mcp.json                      регистрация MCP-сервера Claude → GPT
-├── commands/                      11 слэш-команд
-├── agents/                        gpt-delegate, gpt-advisor
-├── hooks/hooks.json               SessionStart: проверка готовности Codex
-├── scripts/
-│   ├── mcp-lib.mjs                общий MCP-транспорт (JSON-RPC поверх stdio)
-│   ├── codex-core.mjs             обёртка Codex + менеджер фоновых задач
-│   ├── mcp-codex.mjs              MCP-сервер Claude → GPT
-│   ├── image-core.mjs             генерация через встроенный image_gen Codex
-│   ├── models.mjs                 каталог моделей: опрос Codex, кэш, сверка
-│   ├── mcp-image.mjs              MCP-сервер генерации изображений
-│   ├── link-back.mjs              регистрация обратного моста в config.toml
-│   ├── setup.mjs                  диагностика и обратный мост
-│   └── preflight.mjs              хук проверки
-└── bridge/
-    ├── mcp-claude.mjs             MCP-сервер GPT → Claude
-    ├── mcp-client.mjs             MCP-клиент для подключения к серверам Claude
-    └── tool-proxy.mjs             allowlist, обнаружение и переэкспорт инструментов
+/codex:models
 ```
 
-Внешних зависимостей нет: оба MCP-сервера реализуют JSON-RPC поверх stdio
-средствами стандартной библиотеки Node.
+The list isn't baked into the plugin — it's queried from Codex itself, because models get retired and hardcoded lists go stale silently. A typo in a model name is rejected immediately, along with the list of valid options.
 
-## Тесты
+Model selection works at three levels: a flag on the command, a plugin setting, or `model` in `~/.codex/config.toml`.
+
+---
+
+## Security and privacy
+
+**The plugin stores no tokens.** OAuth is handled by `codex login`; the plugin runs on top of the existing local Codex CLI session — the same one you get running `codex` directly.
+
+**Nothing is exposed by default.** The reverse bridge, delegation, and MCP proxying are all off until you explicitly turn them on. The allowed-tools list is a ceiling GPT can narrow but never widen.
+
+**Other people's secrets aren't copied.** When proxying an MCP server, environment variables are stored only as `${VAR}` references, expanded at launch. Literal values are never saved, and `--expose` warns you about them.
+
+**State files** are created with `0600` permissions inside a `0700` directory.
+
+## Cost
+
+Usage draws on your **ChatGPT subscription** limits, separately from your Claude subscription. No API keys, no per-token billing. Image generation stays within the subscription too.
+
+Note that `/codex:image` takes 4–6 minutes — Codex reasons first and only then calls the tool. 4K takes longer. That's normal, not a hang.
+
+## Limitations
+
+- MCP proxying only works with **stdio** servers. HTTP/SSE servers with their own OAuth are easier to register with Codex directly.
+- Image references must be **local files**; the built-in tool doesn't accept URLs.
+- Claude's built-in tools (Read, Edit, Bash) are deliberately not proxied — Codex has its own equivalents.
+
+---
+
+## Development
+
+Architecture, internals, tests, and publishing live in **[README_DEV.en.md](README_DEV.en.md)**.
 
 ```bash
-node tests/regressions.mjs
+node tests/regressions.mjs   # 27 tests, no real codex/claude needed
 ```
 
-По одному тесту на каждый известный дефект: терминальные статусы задач, path
-traversal через `job_id`, обход allowlist инструментов, подмена изображения
-произвольным файлом, порча `config.toml`, обработка кода возврата, права на
-файлы, деградация каталога моделей, разбор аргументов, precedence MCP,
-version negotiation и реакция на смерть вложенного сервера. Настоящие
-`codex`/`claude` не нужны — всё окружение подставное.
+Run without installing: `claude --plugin-dir /path/to/codex-bridge`
 
-## Состояние задач
+## License
 
-Каталог создаётся с правами `0700`, файлы — `0600`, запись атомарная.
-Статусы задач образуют конечный автомат: `running` → `done` / `failed` /
-`cancelled` / `timeout` / `unknown`, обратных переходов нет. Источник истины о
-завершении — файл с кодом возврата, который пишет обёртка `sh`; он переживает
-перезапуск MCP-сервера. Задача, чей процесс исчез, не записав код, получает
-статус `unknown`, а не `done`.
-
-Джобы лежат в `${CLAUDE_PLUGIN_DATA}/jobs/` (`~/.claude/plugins/data/...`) и
-переживают обновление плагина. Задача, висящая дольше `job_timeout_minutes`
-(по умолчанию 30), убивается и помечается как `timeout`.
-
-## Замечания
-
-- Песочница: `review`, `challenge`, `ask` идут в `read-only`; `delegate` —
-  в `workspace-write` с `--ask-for-approval never`. Перед делегированием стоит
-  закоммитить работу.
-- Набор флагов `codex exec` определяется автоматически: плагин один раз читает
-  `codex exec --help` и кэширует результат рядом с данными. Спорные флаги
-  (`--ask-for-approval`) добавляются только если бинарь их объявляет.
-- Проверка перед публикацией: `claude plugin validate ./codex-bridge --strict`.
+MIT
