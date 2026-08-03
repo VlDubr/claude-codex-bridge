@@ -24,7 +24,7 @@ codex login                    # OAuth-вход через аккаунт ChatGP
 В сессии Claude Code:
 
 ```
-/plugin marketplace add ВАШ-ЛОГИН/codex-bridge
+/plugin marketplace add VlDubr/codex-bridge
 /plugin install codex-bridge@codex-tools
 /reload-plugins
 /plugin enable codex-bridge
@@ -38,9 +38,6 @@ codex login                    # OAuth-вход через аккаунт ChatGP
 Репозиторий одновременно является плагином и маркетплейсом из одного плагина:
 `.claude-plugin/marketplace.json` лежит в корне, а его единственная запись
 указывает `"source": "."` — то есть на сам корень репозитория.
-
-Перед первым пушем замените плейсхолдеры `ЗАМЕНИТЕ` в `plugin.json`,
-`marketplace.json` и `LICENSE`, затем проверьте структуру:
 
 ```bash
 claude plugin validate . --strict
