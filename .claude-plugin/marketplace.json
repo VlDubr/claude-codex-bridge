@@ -1,16 +1,21 @@
 {
-  "name": "codex-tools",
+  "name": "claude-codex-bridge",
   "owner": {
     "name": "VlDubr",
     "url": "https://github.com/VlDubr/claude-codex-brigde"
   },
   "plugins": [
     {
-      "name": "claude-codex-brigde",
+      "name": "codex-bridge",
       "source": ".",
       "description": "Двусторонний мост Claude Code ↔ Codex (ChatGPT): ревью, делегирование, генерация изображений",
       "category": "development",
-      "keywords": ["codex", "chatgpt", "multi-model", "image-generation"]
+      "keywords": [
+        "codex",
+        "chatgpt",
+        "multi-model",
+        "image-generation"
+      ]
     }
   ]
 }

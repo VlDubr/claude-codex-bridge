@@ -1,12 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "claude-codex-brigde",
+  "name": "codex-bridge",
   "displayName": "Codex Bridge",
   "version": "0.2.0",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",
-    "url": "https://github.com/VlDubr/claude-codex-brigde"
+    "url": "https://github.com/VlDubr/claude-codex-bridge"
   },
   "license": "MIT",
   "keywords": [
@@ -57,6 +57,6 @@
       "max": 60
     }
   },
-  "homepage": "https://github.com/VlDubr/claude-codex-brigde",
-  "repository": "https://github.com/VlDubr/claude-codex-brigde"
+  "homepage": "https://github.com/VlDubr/claude-codex-bridge",
+  "repository": "https://github.com/VlDubr/claude-codex-bridge"
 }

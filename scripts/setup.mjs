@@ -89,7 +89,7 @@ lines.push(
 lines.push(`изображения → ${process.env.CODEX_BRIDGE_IMAGE_DIR || "assets/generated"} (встроенный image_gen, без API-ключа)`);
 
 const back = isLinked();
-lines.push(`мост GPT→Claude: ${back ? "подключён" : "не подключён (включить: /codex:setup --link-back)"}`);
+lines.push(`мост GPT→Claude: ${back ? "подключён" : "не подключён (включить: /codex-bridge:setup --link-back)"}`);
 if (back && linkedPath() !== bridgePath()) {
   lines.push(`          путь устарел, будет исправлен при следующем старте сессии`);
 }
@@ -118,7 +118,7 @@ if (opts["expose-list"]) {
           `${exposed.servers[n] ? "  [уже проброшен]" : ""}`
       );
     }
-    lines.push("", "Пробросить:  /codex:setup --expose <имя> [--tools a,b,c]");
+    lines.push("", "Пробросить:  /codex-bridge:setup --expose <имя> [--tools a,b,c]");
   }
 }
 
@@ -127,7 +127,7 @@ if (toExpose) {
   const avail = discoverClaudeServers(process.env.CLAUDE_PROJECT_DIR || process.cwd());
   const def = avail[toExpose];
   if (!def) {
-    lines.push("", `Сервер "${toExpose}" не найден. Список: /codex:setup --expose-list`);
+    lines.push("", `Сервер "${toExpose}" не найден. Список: /codex-bridge:setup --expose-list`);
   } else if (def.transport !== "stdio") {
     lines.push(
       "",

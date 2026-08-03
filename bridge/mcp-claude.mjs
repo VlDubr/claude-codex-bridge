@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // MCP stdio-сервер для направления GPT → Claude. Регистрируется в
-// ~/.codex/config.toml командой /codex:setup --link-back.
+// ~/.codex/config.toml командой /codex-bridge:setup --link-back.
 //
 // Даёт Codex три класса инструментов:
 //   1. claude_ask / claude_critique — Claude как консультант (только чтение)
 //   2. claude_task                  — делегирование Claude задачи с его инструментами
 //   3. <server>__<tool>             — инструменты MCP-серверов Claude напрямую
 //
-// Пункты 2 и 3 выключены по умолчанию и включаются через /codex:setup.
+// Пункты 2 и 3 выключены по умолчанию и включаются через /codex-bridge:setup.
 
 import { spawnSync } from "node:child_process";
 import { serve, text, fail } from "../scripts/mcp-lib.mjs";
@@ -78,7 +78,7 @@ function resolveTools(requested, configured, write) {
       return {
         error:
           `Запрошенные инструменты [${asked.join(", ")}] не входят в разрешённый набор ` +
-          `[${admin.join(", ")}]. Набор задаётся администратором через /codex:setup --task-tools и расширению не подлежит.`,
+          `[${admin.join(", ")}]. Набор задаётся администратором через /codex-bridge:setup --task-tools и расширению не подлежит.`,
       };
     }
   }
@@ -205,7 +205,7 @@ ${args.proposal}
   }
 
   if (name === "claude_task") {
-    if (!cfg.allowTask) return fail("claude_task выключен. Включить: /codex:setup --allow-task");
+    if (!cfg.allowTask) return fail("claude_task выключен. Включить: /codex-bridge:setup --allow-task");
     const write = args.write === true;
     const resolved = resolveTools(args.allowed_tools, cfg.taskTools, write);
     if (resolved.error) return fail(resolved.error);

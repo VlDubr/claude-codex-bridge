@@ -2,7 +2,7 @@
 // и переэкспортирует их инструменты под префиксом, чтобы их увидел Codex.
 //
 // Ничего не экспортируется без явного разрешения: файл allowlist создаётся
-// только командой /codex:setup --expose <server>.
+// только командой /codex-bridge:setup --expose <server>.
 
 import fs from "node:fs";
 import os from "node:os";
