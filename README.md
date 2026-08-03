@@ -17,12 +17,12 @@ Two models have different blind spots. A decision one finds obvious, the other w
 Claude Codex Bridge removes the hop. When Claude hits a contested architectural decision, it asks GPT on its own, without you typing a command. When GPT works through unfamiliar code, it reaches out to Claude. You see both positions and exactly where they diverge.
 
 ```
-                       ┌──────────────┐
+                              ┌──────────────┐
    /codex-bridge:ask          │              │        claude_ask
    /codex-bridge:review   ───►│    Codex     │◄───    claude_critique
    /codex-bridge:delegate     │    Bridge    │        claude_task
-   Claude Code     ◄───│              │───►    Codex CLI
-   results             └──────────────┘        proxied MCP tools
+   Claude Code            ◄───│              │───►    Codex CLI
+   results                    └──────────────┘        proxied MCP tools
 ```
 
 ---

@@ -17,12 +17,12 @@
 Claude Codex Bridge убирает этот перенос. Claude, наткнувшись на спорное архитектурное решение, сам спросит мнение GPT — без вашей команды. GPT, разбираясь в незнакомом коде, сам обратится к Claude. Вы видите обе позиции и точку расхождения.
 
 ```
-                       ┌──────────────┐
+                              ┌──────────────┐
    /codex-bridge:ask          │              │        claude_ask
    /codex-bridge:review   ───►│    Codex     │◄───    claude_critique
    /codex-bridge:delegate     │    Bridge    │        claude_task
-   Claude Code     ◄───│              │───►    Codex CLI
-   результаты          └──────────────┘        проброшенные MCP
+   Claude Code            ◄───│              │───►    Codex CLI
+   результаты                 └──────────────┘        проброшенные MCP
 ```
 
 ---
