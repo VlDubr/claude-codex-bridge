@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "codex-bridge",
+  "displayName": "Codex Bridge",
+  "version": "0.1.0",
+  "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
+  "author": {
+    "name": "Your Name"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "chatgpt",
+    "gpt",
+    "review",
+    "multi-model",
+    "delegation",
+    "image-generation",
+    "gpt-image-2"
+  ],
+  "defaultEnabled": true,
+  "userConfig": {
+    "default_model": {
+      "type": "string",
+      "title": "Модель Codex по умолчанию",
+      "description": "Например gpt-5.6-sol, gpt-5.4-mini, gpt-5.3-codex-spark. Пусто — дефолт самого Codex.",
+      "required": false
+    },
+    "default_effort": {
+      "type": "string",
+      "title": "Reasoning effort по умолчанию",
+      "description": "minimal | low | medium | high. Пусто — дефолт Codex.",
+      "required": false
+    },
+    "job_timeout_minutes": {
+      "type": "number",
+      "title": "Таймаут фоновой задачи (мин)",
+      "description": "После этого времени джоба помечается как timeout и процесс убивается.",
+      "default": 30,
+      "min": 1,
+      "max": 480
+    },
+    "image_output_dir": {
+      "type": "string",
+      "title": "Каталог для изображений",
+      "description": "Куда складывать сгенерированное, относительно корня проекта.",
+      "default": "assets/generated",
+      "required": false
+    },
+    "image_timeout_minutes": {
+      "type": "number",
+      "title": "Таймаут генерации изображения (мин)",
+      "description": "Встроенный инструмент Codex обычно отвечает за 4–6 минут, при 4K дольше.",
+      "default": 15,
+      "min": 2,
+      "max": 60
+    }
+  }
+}
