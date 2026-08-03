@@ -10,6 +10,8 @@ import {
   listJobs,
   resolveJob,
   jobOutput,
+  jobProgress,
+  jobAnswer,
   cancelJob,
   humanAge,
   envClean,
@@ -31,6 +33,12 @@ const TOOLS = [
             "Твой текущий контекст: что ты уже выяснил, какое решение предлагаешь, какие есть сомнения. Чем конкретнее, тем полезнее ответ.",
         },
         model: { type: "string", description: "Модель Codex, напр. gpt-5.6-sol или gpt-5.4-mini." },
+        wait_seconds: {
+          type: "number",
+          default: 90,
+          description:
+            "Сколько ждать синхронного ответа. Если Codex не успеет, вызов не падает по таймауту, а уходит в фон и возвращает job_id вместе с лентой прогресса — дальше следи через codex_status.",
+        },
         effort: {
           type: "string",
           enum: EFFORT_LEVELS,
@@ -115,6 +123,18 @@ const TOOLS = [
     },
   },
   {
+    name: "codex_progress",
+    description:
+      "Показать, чем модель занята прямо сейчас: лента её рассуждений, запущенных команд, правок файлов и поисков. Используй вместо ожидания вслепую, когда задача идёт долго.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "По умолчанию последняя задача." },
+        limit: { type: "number", default: 12, description: "Сколько последних шагов показать." },
+      },
+    },
+  },
+  {
     name: "codex_status",
     description: "Показать статус фоновых задач Codex для текущего репозитория.",
     inputSchema: {
@@ -183,8 +203,43 @@ function handleTool(name, args) {
 
   switch (name) {
     case "codex_ask": {
-      const r = runSync({ mode: "ask", cwd, ...args, timeoutMs: 240_000 });
-      return r.ok ? text(`Ответ GPT:\n\n${r.output}`) : err(r.error);
+      const waitMs = Math.max(10, Number(args.wait_seconds) || 90) * 1000;
+      const r = runSync({ mode: "ask", cwd, ...args, timeoutMs: waitMs });
+      if (r.ok) {
+        return text(
+          `Ответ GPT:\n\n${r.output}` +
+            (r.trail?.length ? `\n\n— ход работы: ${r.trail.slice(-3).join(" → ")}` : "")
+        );
+      }
+      // Таймаут — не отказ: переносим ту же работу в фон, чтобы она не пропала
+      // и за ней можно было следить, вместо того чтобы просить пользователя
+      // повторить всё заново.
+      if (r.timedOut) {
+        const job = startJob({ mode: "ask", cwd, ...args });
+        return text(
+          `GPT не уложился в ${Math.round(waitMs / 1000)}с — работа продолжена в фоне: ${job.id}\n\n` +
+            `Первая попытка успела дойти до:\n${(r.error.match(/  · .+/g) || []).join("\n") || "  (нет данных)"}\n\n` +
+            `Смотри ход работы: codex_progress. Забрать ответ: codex_result.`
+        );
+      }
+      return err(r.error);
+    }
+
+    case "codex_progress": {
+      const j = resolveJob(args.job_id, cwd);
+      if (!j) return err("Задача не найдена. Список — codex_status.");
+      const p = jobProgress(j.id, { limit: Number(args.limit) || 12 });
+      if (!p.hasEvents) {
+        return text(
+          `${j.id} [${j.status}] — событий пока нет (${humanAge(j.startedAt)} с запуска).\n` +
+            `Если Codex запущен без поддержки --json, лента недоступна; используй codex_result по завершении.`
+        );
+      }
+      return text(
+        `${j.id} [${j.status}], идёт ${humanAge(j.startedAt)}\n\n` +
+          p.trail.map((l) => `  · ${l}`).join("\n") +
+          (p.finished ? "\n\nРабота завершена — забери результат через codex_result." : "")
+      );
     }
 
     case "codex_review":
@@ -218,8 +273,11 @@ function handleTool(name, args) {
       if (args.job_id) {
         const j = resolveJob(args.job_id, cwd);
         if (!j) return err(`Задача ${args.job_id} не найдена.`);
-        const preview = jobOutput(j.id, { tail: 15 });
-        return text(`${fmtJob(j)}\n\n--- последние строки ---\n${preview || "(пока пусто)"}`);
+        const p = jobProgress(j.id, { limit: 10 });
+        const body = p.hasEvents
+          ? p.trail.map((l) => `  · ${l}`).join("\n")
+          : jobOutput(j.id, { tail: 15 }) || "(пока пусто)";
+        return text(`${fmtJob(j)}\n\n--- ход работы ---\n${body}`);
       }
       const jobs = listJobs(cwd).slice(0, 10);
       if (!jobs.length) return text("Фоновых задач Codex в этом репозитории нет.");
@@ -230,9 +288,14 @@ function handleTool(name, args) {
       const j = resolveJob(args.job_id, cwd);
       if (!j) return err("Задача не найдена.");
       if (j.status === "running") {
-        return text(`${j.id} ещё выполняется (${humanAge(j.startedAt)}). Промежуточный вывод:\n\n${jobOutput(j.id, { tail: 30 })}`);
+        const p = jobProgress(j.id, { limit: 10 });
+        return text(
+          `${j.id} ещё выполняется (${humanAge(j.startedAt)}).\n\n` +
+            (p.hasEvents ? p.trail.map((l) => `  · ${l}`).join("\n") : jobOutput(j.id, { tail: 30 }))
+        );
       }
-      const out = jobOutput(j.id, args.tail ? { tail: args.tail } : {});
+      const answer = jobAnswer(j.id);
+      const out = answer || jobOutput(j.id, args.tail ? { tail: args.tail } : {});
       return text(`${j.id} [${j.status}] — ${j.mode}\n\n${out || "(вывод пуст)"}`);
     }
 

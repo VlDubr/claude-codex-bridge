@@ -47,6 +47,21 @@ Describe the bug — GPT diagnoses the cause itself, makes the smallest safe cha
 /codex-bridge:cancel      # changed my mind
 ```
 
+### Watching the work happen
+
+Long-running calls don't sit behind a blind timeout. Codex streams its activity — reasoning, shell commands, file edits, web searches — and the plugin turns that into a readable trail:
+
+```
+/codex-bridge:progress
+
+  · размышляет: Разбираю схему ретраев вебхука
+  · запускает: rg -n retry src/
+  · ищет в вебе: idempotency key payment webhook
+  · размышляет: Проверяю гонку при повторной доставке
+```
+
+If a synchronous `codex_ask` runs past its wait budget, it doesn't fail — the work moves to the background and you get a job id plus everything the model managed to do so far.
+
 ### Two models working together
 
 ```
@@ -157,6 +172,7 @@ Only what you list is proxied. A tool left out of `--tools` simply does not exis
 | `/codex-bridge:review [--base main] [--now]` | Review current changes |
 | `/codex-bridge:challenge <what to challenge>` | Adversarial review: challenges the design |
 | `/codex-bridge:delegate <task>` | GPT investigates and fixes it, with write access |
+| `/codex-bridge:progress [id]` | What the model is doing right now: reasoning, commands, file edits |
 | `/codex-bridge:status [id]` | Background job status |
 | `/codex-bridge:result [id]` | Output of a finished job |
 | `/codex-bridge:cancel [id]` | Cancel a running job |

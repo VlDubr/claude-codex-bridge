@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { extractOutput, progressTrail, isFinished, parseStream } from "./codex-events.mjs";
 
 // ---------------------------------------------------------------- пути и стор
 
@@ -143,6 +144,7 @@ export function capabilities({ force = false } = {}) {
     cd: /--cd\b/.test(text),
     image: /--image\b/.test(text),
     bypassSandbox: /--dangerously-bypass-approvals-and-sandbox/.test(text),
+    json: /--json\b/.test(text),
     // help не прочитался — не выключаем базовые флаги, но и не включаем спорные
     probed: text.trim().length > 0,
   };
@@ -177,6 +179,9 @@ const SANDBOX_BY_MODE = {
 export function buildArgs({ mode, model, effort, cwd, sandbox, images = [] }) {
   const caps = capabilities();
   const args = ["exec"];
+  // JSONL-поток событий: без него единственным сигналом о работе модели
+  // остаётся таймаут. Ответ достаём из события agent_message.
+  if (caps.json) args.push("--json");
   if (caps.skipGitRepoCheck) args.push("--skip-git-repo-check");
 
   // Аварийный обход: нужен, когда песочница Codex сломана рассинхроном версий.
@@ -381,14 +386,26 @@ export function runSync(opts) {
     cwd: opts.cwd || process.cwd(),
   });
 
-  if (r.error?.code === "ETIMEDOUT")
-    return { ok: false, error: `Codex не ответил за ${Math.round(timeoutMs / 1000)}с. Запусти это же в фоне.` };
+  if (r.error?.code === "ETIMEDOUT") {
+    // Показываем, чем модель успела заняться: голый таймаут ничего не объясняет
+    const trail = progressTrail(r.stdout || "", { limit: 8 });
+    return {
+      ok: false,
+      timedOut: true,
+      error:
+        `Codex не уложился в ${Math.round(timeoutMs / 1000)}с и был остановлен.` +
+        (trail.length ? `\n\nЧто он успел сделать:\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
+        `\n\nЗапусти то же самое в фоне — тогда можно следить за ходом работы через codex_status.`,
+    };
+  }
   if (r.error?.code === "ENOENT")
     return { ok: false, error: "Codex CLI не найден. Установи: npm install -g @openai/codex" };
   if (r.error) return { ok: false, error: String(r.error.message || r.error) };
 
-  const out = denoise(r.stdout);
+  const parsed = extractOutput(r.stdout);
+  const out = denoise(parsed.text);
   const errText = denoise(r.stderr);
+  const trail = progressTrail(parsed.events, { limit: 8 });
 
   // Ненулевой код — всегда ошибка, даже если что-то успело напечататься:
   // частичный отчёт, выданный за успех, опаснее пустого отказа.
@@ -403,10 +420,11 @@ export function runSync(opts) {
         (reason ? `${reason}\n\n` : "") +
         `Codex завершился с кодом ${r.status}.` +
         (errText ? `\n${errText.slice(0, 800)}` : "") +
+        (trail.length ? `\n\nХод работы:\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
         (out && !reason ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
     };
   }
-  return { ok: true, output: out, stderr: errText };
+  return { ok: true, output: out, stderr: errText, trail };
 }
 
 // ------------------------------------------------------------- фоновые задачи
@@ -555,6 +573,25 @@ export function jobOutput(id, { tail = 0 } = {}) {
     return "";
   }
   return tail > 0 ? textOut.split("\n").slice(-tail).join("\n") : textOut;
+}
+
+/**
+ * Лента прогресса фоновой задачи: что модель делала и делает сейчас.
+ * Читается из того же лога, куда пишется JSONL-поток событий.
+ */
+export function jobProgress(id, { limit = 12 } = {}) {
+  const raw = jobOutput(id);
+  const events = parseStream(raw);
+  return {
+    trail: progressTrail(events, { limit }),
+    finished: isFinished(events),
+    hasEvents: events.length > 0,
+  };
+}
+
+/** Итоговый ответ фоновой задачи, извлечённый из потока событий. */
+export function jobAnswer(id) {
+  return extractOutput(jobOutput(id)).text;
 }
 
 export function cancelJob(id) {

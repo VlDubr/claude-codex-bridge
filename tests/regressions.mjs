@@ -626,6 +626,92 @@ await t("15c. рассинхрон версий Codex обнаруживаетс
   delete process.env.CODEX_HOME;
 });
 
+// ────────── 16. Прогресс вместо слепого таймаута
+
+const JSONL = [
+  '{"type":"thread.started","thread_id":"019f-abc"}',
+  '{"type":"turn.started"}',
+  '{"type":"item.completed","item":{"id":"i0","type":"reasoning","text":"**Scanning docs for exec JSON schema**"}}',
+  '{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","status":"in_progress"}}',
+  '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","exit_code":0}}',
+  '{"type":"error","message":"Reconnecting... 1/5"}',
+  '{"type":"item.completed","item":{"id":"i2","type":"file_change","changes":[{"path":"src/a.ts"}]}}',
+  '{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"Итоговый ответ модели."}}',
+  '{"type":"turn.completed","usage":{"input_tokens":24763,"output_tokens":122}}',
+].join("\n");
+
+await t("16a. поток событий превращается в ленту действий и ответ", async () => {
+  const ev = await import(`${ROOT}/scripts/codex-events.mjs?e=${Date.now()}`);
+
+  const { text: answer, events } = ev.extractOutput(JSONL);
+  assert.equal(answer, "Итоговый ответ модели.", "ответ не извлечён из agent_message");
+  assert.ok(ev.isFinished(events), "завершение не распознано");
+  assert.deepEqual(ev.usageOf(events), { input_tokens: 24763, output_tokens: 122 });
+
+  const trail = ev.progressTrail(JSONL);
+  assert.ok(trail.some((l) => /размышляет: Scanning docs/.test(l)), `нет рассуждений: ${trail}`);
+  assert.ok(trail.some((l) => /запускает: ls/.test(l)), `нет запуска команды: ${trail}`);
+  assert.ok(trail.some((l) => /правит файлы: src\/a\.ts/.test(l)), `нет правки файлов: ${trail}`);
+  assert.ok(trail.some((l) => /переподключение/.test(l)), "реконнект потерян");
+});
+
+await t("16b. реконнект не считается фатальной ошибкой", async () => {
+  const ev = await import(`${ROOT}/scripts/codex-events.mjs?f=${Date.now()}`);
+  assert.equal(ev.isFatalError({ type: "error", message: "Reconnecting... 1/5" }), false);
+  assert.equal(ev.isFatalError({ type: "error", message: "stream broke" }), true);
+  assert.equal(ev.isFatalError({ type: "turn.failed", error: { message: "boom" } }), true);
+});
+
+await t("16c. не-JSON вывод не теряется (старый Codex без --json)", async () => {
+  const ev = await import(`${ROOT}/scripts/codex-events.mjs?g=${Date.now()}`);
+  const r = ev.extractOutput("обычный текстовый ответ\nвторая строка");
+  assert.equal(r.text, "обычный текстовый ответ\nвторая строка", "текст потерян при отсутствии событий");
+  assert.equal(r.events.length, 0);
+});
+
+await t("16d. таймаут показывает, что модель успела сделать", async () => {
+  const d = fresh("timeout-trail");
+  const bin = path.join(d, "codex");
+  fs.writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const a=process.argv.slice(2);
+if(a[0]==="--version"){console.log("codex 0.0.0-fake");process.exit(0)}
+if(a[0]==="login"){console.log("Logged in");process.exit(0)}
+if(a[0]==="exec"&&a[1]==="--help"){console.log("Usage: codex exec\\n  --json\\n  --sandbox <mode>\\n  --cd <dir>");process.exit(0)}
+if(a[0]==="exec"){
+  process.stdout.write(${JSON.stringify(JSONL.split("\n").slice(0, 5).join("\n") + "\n")});
+  setTimeout(()=>process.exit(0), 60000); // зависаем после нескольких событий
+}`,
+    { mode: 0o755 }
+  );
+  process.env.CODEX_BIN = bin;
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT}/scripts/codex-core.mjs?to=${Date.now()}`);
+
+  const r = core.runSync({ mode: "ask", question: "x", cwd: d, timeoutMs: 2500 });
+  assert.equal(r.ok, false);
+  assert.equal(r.timedOut, true, "таймаут не помечен");
+  assert.ok(!/Запусти это же в фоне\.$/.test(r.error), "остался голый совет без контекста");
+  assert.match(r.error, /Что он успел сделать/, "не показана лента прогресса");
+  assert.match(r.error, /размышляет|запускает/, `в ленте нет действий: ${r.error}`);
+});
+
+await t("16e. --json добавляется в аргументы, когда поддержан", async () => {
+  const d = fresh("jsonflag");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE_HELP = "Usage: codex exec\n  --json\n  --sandbox <mode>";
+  let core = await import(`${ROOT}/scripts/codex-core.mjs?j1=${Date.now()}`);
+  assert.ok(core.buildArgs({ mode: "ask", cwd: d }).includes("--json"), "--json не добавлен");
+
+  process.env.FAKE_HELP = "Usage: codex exec\n  --sandbox <mode>";
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data2");
+  core = await import(`${ROOT}/scripts/codex-core.mjs?j2=${Date.now()}`);
+  assert.ok(!core.buildArgs({ mode: "ask", cwd: d }).includes("--json"), "--json добавлен без поддержки");
+  delete process.env.FAKE_HELP;
+});
+
 // ───────────────────────────────── 10. Парсер аргументов setup
 
 await t("10. setup отвергает флаг вместо значения и взаимоисключающие пары", async () => {

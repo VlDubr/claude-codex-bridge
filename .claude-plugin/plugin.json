@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",

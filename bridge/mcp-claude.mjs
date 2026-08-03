@@ -239,4 +239,4 @@ ${write ? "Ты можешь изменять файлы." : "Работай т�
 
 process.on("exit", () => proxy.stop());
 
-serve({ name: "claude-bridge", version: "0.2.3", tools: TOOLS, handle });
+serve({ name: "claude-bridge", version: "0.3.0", tools: TOOLS, handle });

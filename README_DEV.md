@@ -36,6 +36,7 @@ claude-codex-bridge/
 │   ├── codex-core.mjs       codex exec wrapper, capabilities, job manager
 │   ├── mcp-codex.mjs        MCP server, Claude → GPT
 │   ├── codex-health.mjs           диагностика установки Codex, рассинхрон версий
+│   ├── codex-events.mjs           разбор JSONL-потока событий codex exec --json
 │   ├── models.mjs           model catalog: query Codex, cache, validate
 │   ├── image-core.mjs       generation via the built-in image_gen tool
 │   ├── mcp-image.mjs        MCP server for image generation
@@ -88,6 +89,16 @@ The same class of mistake as with models — I just managed to make it twice: th
 `EFFORT_LEVELS` in `models.mjs` is deliberately a wide list, used only for the MCP tool schema; the real filtering happens in `validateEffort()` against the catalog's `supported_reasoning_efforts`. As with models, the check is skipped when the catalog is incomplete: better to let a questionable value through than to reject a working one.
 
 `explainCodexFailure()` in `codex-core.mjs` additionally turns the API response into an actionable message, pulling the supported values out of the error text. `denoise()` strips Codex's own housekeeping lines (chiefly its internal model-cache mismatch) so they can't mask the real cause.
+
+### Progress instead of a blind timeout
+
+`codex exec --json` streams a JSONL event feed while the agent works: `turn.started`, `item.started/updated/completed`, `turn.completed` with token usage. Item types cover reasoning, command execution, file changes, MCP tool calls, web searches and plan updates.
+
+`codex-events.mjs` parses that feed and renders it for a human. Two details from the format matter: reasoning items only appear when reasoning summaries are enabled, and `type: "error"` carrying `Reconnecting... X/Y` is a non-fatal retry notice, not a failure — `isFatalError()` distinguishes them.
+
+The flag is added only when capability detection finds it. Without it `extractOutput()` returns the raw text unchanged, so an older Codex degrades to the previous behaviour rather than losing the answer.
+
+`codex_ask` no longer dies on timeout. It waits `wait_seconds` (90 by default), and if the model is still working it restarts the same request as a background job and returns the trail collected so far. The work isn't thrown away and the user isn't asked to retry from scratch.
 
 ### Background job manager
 

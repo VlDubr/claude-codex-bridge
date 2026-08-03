@@ -11,7 +11,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { codexBinary, denoise, explainCodexFailure, envClean, bypassSandboxEnabled } from "./codex-core.mjs";
+import { codexBinary, denoise, explainCodexFailure, envClean, bypassSandboxEnabled, capabilities } from "./codex-core.mjs";
+import { extractOutput, progressTrail } from "./codex-events.mjs";
 
 export const PROMPT_MAX = 20_000;
 export const ASPECT_RATIOS = ["1:1", "9:16", "16:9", "4:3", "3:4", "auto"];
@@ -216,7 +217,9 @@ export function generateImage(opts) {
   const file = `${slug(name || prompt)}-${crypto.randomBytes(3).toString("hex")}.png`;
   const target = path.join(dir, file);
 
-  const args = ["exec", "--skip-git-repo-check"];
+  const args = ["exec"];
+  if (capabilities().json) args.push("--json");
+  args.push("--skip-git-repo-check");
   if (bypassSandboxEnabled()) {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else {
@@ -245,9 +248,11 @@ export function generateImage(opts) {
     };
   if (r.error) return { ok: false, error: String(r.error.message || r.error) };
 
-  const out = denoise(r.stdout);
+  const parsed = extractOutput(r.stdout);
+  const out = denoise(parsed.text);
   const errText = denoise(r.stderr);
-  const tailOf = (t) => t.split("\n").slice(-15).join("\n");
+  const trail = progressTrail(parsed.events, { limit: 8 });
+  const tailOf = (t) => (trail.length ? trail.map((l) => `  · ${l}`).join("\n") : t.split("\n").slice(-15).join("\n"));
 
   // Код возврата проверяем ДО поиска файлов: иначе подберём чужой артефакт
   // и выдадим провалившийся запуск за успех.
@@ -309,7 +314,11 @@ export function generateImage(opts) {
   if (rescued) return accept(rescued, rescued);
 
   const failed = /^FAILED:\s*(.+)$/m.exec(out)?.[1]?.trim();
-  const suspectScript = /OPENAI_API_KEY|api\.openai\.com|images\/generations/i.test(out);
+  // Признаки ухода на платный API ищем во всём потоке, а не только в ответе:
+  // попытка обычно видна в событии command_execution.
+  const suspectScript = /OPENAI_API_KEY|api\.openai\.com|images\/generations/i.test(
+    `${out}\n${JSON.stringify(parsed.events)}`
+  );
   return {
     ok: false,
     error:
