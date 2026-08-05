@@ -6,7 +6,16 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { extractOutput, progressTrail, isFinished, parseStream } from "./codex-events.mjs";
+import {
+  extractOutput,
+  progressTrail,
+  isFinished,
+  parseStream,
+  parseLine,
+  normalizeStream,
+  threadIdOf,
+} from "./codex-events.mjs";
+import { alive, killTree } from "./proc.mjs";
 
 // ---------------------------------------------------------------- пути и стор
 
@@ -88,7 +97,7 @@ function writeJob(job) {
   return job;
 }
 
-function repoKey(cwd) {
+export function repoKey(cwd) {
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
   return (r.status === 0 ? r.stdout.trim() : cwd) || cwd;
 }
@@ -173,12 +182,17 @@ const SANDBOX_BY_MODE = {
   ask: "read-only",
   review: "read-only",
   challenge: "read-only",
+  chat: "read-only",
   delegate: "workspace-write",
 };
 
-export function buildArgs({ mode, model, effort, cwd, sandbox, images = [] }) {
+export function buildArgs({ mode, model, effort, cwd, sandbox, images = [], resume = null, reasoningSummary = null }) {
   const caps = capabilities();
   const args = ["exec"];
+  // Продолжение разговора: `exec resume <uuid>` поднимает прежний тред.
+  // Флага --cd у него нет, поэтому рабочий каталог задаёт сам процесс.
+  const resuming = Boolean(resume);
+  if (resuming) args.push("resume");
   // JSONL-поток событий: без него единственным сигналом о работе модели
   // остаётся таймаут. Ответ достаём из события agent_message.
   if (caps.json) args.push("--json");
@@ -189,28 +203,43 @@ export function buildArgs({ mode, model, effort, cwd, sandbox, images = [] }) {
   // изоляции, и это осознанный размен, а не значение по умолчанию.
   if (bypassSandboxEnabled() && caps.bypassSandbox) {
     args.push("--dangerously-bypass-approvals-and-sandbox");
-    if (cwd && caps.cd) args.push("--cd", cwd);
+    if (cwd && caps.cd && !resuming) args.push("--cd", cwd);
     const mb = model || envClean("CODEX_BRIDGE_MODEL");
     if (mb) args.push("-m", mb);
     const eb = effort || envClean("CODEX_BRIDGE_EFFORT");
     if (eb) args.push("-c", `model_reasoning_effort="${eb}"`);
+    const sb = reasoningSummary || envClean("CODEX_BRIDGE_REASONING_SUMMARY");
+    if (sb) args.push("-c", `model_reasoning_summary="${sb}"`);
     if (caps.image) for (const img of images) args.push("--image", img);
+    if (resuming) args.push(resume);
     args.push("-");
     return args;
   }
 
   const sb = sandbox || SANDBOX_BY_MODE[mode] || "read-only";
-  if (caps.sandbox) args.push("--sandbox", sb);
-  // exec и так неинтерактивен; флаг добавляем только если он существует
-  if (sb === "workspace-write" && caps.askForApproval) args.push("--ask-for-approval", "never");
-  if (cwd && caps.cd) args.push("--cd", cwd);
+  if (resuming) {
+    // У `exec resume` нет ни --sandbox, ни --ask-for-approval, ни --cd:
+    // режим задаётся конфигом, а рабочий каталог — каталогом процесса.
+    args.push("-c", `sandbox_mode="${sb}"`);
+    if (sb === "workspace-write") args.push("-c", 'approval_policy="never"');
+  } else {
+    if (caps.sandbox) args.push("--sandbox", sb);
+    // exec и так неинтерактивен; флаг добавляем только если он существует
+    if (sb === "workspace-write" && caps.askForApproval) args.push("--ask-for-approval", "never");
+    if (cwd && caps.cd) args.push("--cd", cwd);
+  }
 
   const m = model || envClean("CODEX_BRIDGE_MODEL");
   if (m) args.push("-m", m);
   const e = effort || envClean("CODEX_BRIDGE_EFFORT");
   if (e) args.push("-c", `model_reasoning_effort="${e}"`);
+  // Сводки размышлений: при auto Codex может не прислать ни одной, и лента
+  // остаётся без самой содержательной части.
+  const rs = reasoningSummary || envClean("CODEX_BRIDGE_REASONING_SUMMARY");
+  if (rs) args.push("-c", `model_reasoning_summary="${rs}"`);
   if (caps.image) for (const img of images) args.push("--image", img);
 
+  if (resuming) args.push(resume);
   args.push("-"); // промпт со stdin
   return args;
 }
@@ -283,9 +312,17 @@ ${context ? `КОНТЕКСТ ОТ CLAUDE:\n${context}\n\n` : ""}ВОПРОС:
 ${question}
 
 Ответь по существу и сжато. Можешь читать файлы репозитория, чтобы проверить факты. Если ты не согласен с посылкой вопроса — скажи об этом прямо, это ценнее вежливого согласия. Если уверенности нет — обозначь степень уверенности.`,
+
+  chat: (message, context) => `С тобой начинает разговор пользователь через Claude Code: его сообщения передаёт мост, а ты отвечаешь как самостоятельная модель. Разговор продолжится в этом же треде, поэтому помни контекст.
+
+${context ? `КОНТЕКСТ:\n${context}\n\n` : ""}СООБЩЕНИЕ:
+${message}
+
+Отвечай по существу и сжато. Можешь читать файлы репозитория. Если сообщение неоднозначно — уточни, а не угадывай.`,
 };
 
-export function buildPrompt({ mode, task, focus, question, context, cwd, base }) {
+export function buildPrompt({ mode, task, focus, question, context, cwd, base, message, resume }) {
+  if (mode === "chat") return resume ? String(message || "") : PROMPTS.chat(message, context);
   if (mode === "delegate") return PROMPTS.delegate(task);
   if (mode === "ask") return PROMPTS.ask(question, context);
   const diff = collectDiff(cwd, base);
@@ -373,71 +410,25 @@ export function explainCodexFailure(stderr, stdout = "") {
   return null;
 }
 
-// ---------------------------------------------------------- синхронный запуск
-
-export function runSync(opts) {
-  const { timeoutMs = 240_000 } = opts;
-  const prompt = opts.prompt || buildPrompt(opts);
-  const r = spawnSync(codexBinary(), buildArgs(opts), {
-    input: prompt,
-    encoding: "utf8",
-    timeout: timeoutMs,
-    maxBuffer: 32 * 1024 * 1024,
-    cwd: opts.cwd || process.cwd(),
-  });
-
-  if (r.error?.code === "ETIMEDOUT") {
-    // Показываем, чем модель успела заняться: голый таймаут ничего не объясняет
-    const trail = progressTrail(r.stdout || "", { limit: 8 });
-    return {
-      ok: false,
-      timedOut: true,
-      error:
-        `Codex не уложился в ${Math.round(timeoutMs / 1000)}с и был остановлен.` +
-        (trail.length ? `\n\nЧто он успел сделать:\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
-        `\n\nЗапусти то же самое в фоне — тогда можно следить за ходом работы через codex_status.`,
-    };
-  }
-  if (r.error?.code === "ENOENT")
-    return { ok: false, error: "Codex CLI не найден. Установи: npm install -g @openai/codex" };
-  if (r.error) return { ok: false, error: String(r.error.message || r.error) };
-
-  const parsed = extractOutput(r.stdout);
-  const out = denoise(parsed.text);
-  const errText = denoise(r.stderr);
-  const trail = progressTrail(parsed.events, { limit: 8 });
-
-  // Ненулевой код — всегда ошибка, даже если что-то успело напечататься:
-  // частичный отчёт, выданный за успех, опаснее пустого отказа.
-  if (r.status !== 0) {
-    const reason = explainCodexFailure(errText, out);
-    return {
-      ok: false,
-      exitCode: r.status,
-      partialOutput: out || null,
-      reason,
-      error:
-        (reason ? `${reason}\n\n` : "") +
-        `Codex завершился с кодом ${r.status}.` +
-        (errText ? `\n${errText.slice(0, 800)}` : "") +
-        (trail.length ? `\n\nХод работы:\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
-        (out && !reason ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
-    };
-  }
-  return { ok: true, output: out, stderr: errText, trail };
-}
-
-// ------------------------------------------------------------- фоновые задачи
+// ------------------------------------------------------------------- задачи
 
 const TERMINAL = new Set(["done", "failed", "cancelled", "timeout", "unknown"]);
 
+export function jobTimeoutMs() {
+  return (Number(envClean("CODEX_BRIDGE_JOB_TIMEOUT_MIN")) || 30) * 60_000;
+}
+
 /**
- * Фоновая задача запускается через /bin/sh, который перенаправляет вывод и
- * атомарно записывает код возврата в отдельный файл. Это единственный источник
- * истины о завершении: обработчик child.on("exit") в родителе не переживает
- * перезапуск MCP-сервера и создавал гонку с cancelJob().
- * Промпт и пути передаются позиционными аргументами, а не подстановкой в
- * строку команды, поэтому шелл-инъекция невозможна.
+ * Запускает задачу отдельным процессом-воркером (scripts/job-worker.mjs).
+ *
+ * Раньше здесь был `/bin/sh` с редиректами: на Windows такого бинаря нет, и
+ * задача умирала до первой строки вывода, оставляя статус unknown. Воркер на
+ * Node переносим, сам ставит метки времени событиям, сам пишет код возврата и
+ * сам убивает дерево процессов по таймауту.
+ *
+ * Код возврата в отдельном файле остаётся единственным признаком завершения:
+ * обработчик exit в родителе не переживает перезапуск MCP-сервера и создавал
+ * гонку с cancelJob().
  */
 export function startJob(opts) {
   const id = `job-${crypto.randomBytes(4).toString("hex")}`;
@@ -447,28 +438,43 @@ export function startJob(opts) {
   const promptFile = jobPath(id, "prompt");
   const outFile = jobPath(id, "out");
   const codeFile = jobPath(id, "code");
+  const noteFile = jobPath(id, "note");
+  const specFile = jobPath(id, "spec");
   writeFileSecure(promptFile, prompt);
 
   const args = buildArgs({ ...opts, cwd });
-  const script =
-    'BIN="$1"; PROMPT="$2"; OUT="$3"; CODE="$4"; shift 4; ' +
-    '"$BIN" "$@" < "$PROMPT" >> "$OUT" 2>&1; ' +
-    'printf %s "$?" > "$CODE.tmp" && mv "$CODE.tmp" "$CODE"';
+  writeFileSecure(
+    specFile,
+    JSON.stringify({
+      bin: codexBinary(),
+      args,
+      promptFile,
+      outFile,
+      codeFile,
+      noteFile,
+      cwd,
+      timeoutMs: Number(opts.jobTimeoutMs) || jobTimeoutMs(),
+    })
+  );
 
-  const child = spawn("/bin/sh", ["-c", script, "sh", codexBinary(), promptFile, outFile, codeFile, ...args], {
+  const worker = path.join(import.meta.dirname, "job-worker.mjs");
+  const child = spawn(process.execPath, [worker, specFile], {
     cwd,
     detached: true,
-    stdio: ["ignore", "ignore", "ignore"], // редирект делает сам sh — дескрипторы не текут
+    stdio: ["ignore", "ignore", "ignore"],
+    windowsHide: true,
   });
   child.unref();
 
-  return writeJob({
+  const job = writeJob({
     id,
-    pid: child.pid,
+    pid: child.pid ?? null,
     mode: opts.mode,
     model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
     effort: opts.effort || envClean("CODEX_BRIDGE_EFFORT") || null,
-    label: String(opts.task || opts.focus || opts.question || opts.mode || "").slice(0, 120),
+    label: String(opts.task || opts.focus || opts.question || opts.message || opts.mode || "").slice(0, 120),
+    chat: opts.chat || null,
+    resumedFrom: opts.resume || null,
     cwd,
     repo: repoKey(cwd),
     status: "running",
@@ -476,15 +482,28 @@ export function startJob(opts) {
     startedAt: new Date().toISOString(),
     finishedAt: null,
   });
+
+  // Отказ запуска самого воркера: без этого задача осталась бы «running»
+  // навсегда, а причина — только в stderr, которого никто не читает.
+  child.on("error", (e) => {
+    try {
+      fs.appendFileSync(
+        outFile,
+        JSON.stringify({ type: "turn.failed", error: { message: `не удалось запустить воркер: ${e?.message || e}` } }) + "\n"
+      );
+      writeFileSecure(codeFile, "127");
+      writeFileSecure(noteFile, "spawn_failed");
+    } catch {}
+  });
+
+  return job;
 }
 
-function alive(pid) {
-  if (!Number.isInteger(pid) || pid <= 1) return false;
+function readNote(id) {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e.code === "EPERM"; // процесс есть, но чужой
+    return fs.readFileSync(jobPath(id, "note"), "utf8").trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -498,13 +517,22 @@ function readExitCode(id) {
   }
 }
 
+// Пометка воркера о причине завершения → статус и человеческое объяснение.
+const NOTE_STATUS = {
+  timeout: ["timeout", "Задача остановлена по таймауту."],
+  cancelled: ["cancelled", "Задача отменена."],
+  spawn_failed: ["failed", "Codex не запустился: проверь установку (npm install -g @openai/codex)."],
+};
+
 /** Приводит статус в соответствие с реальностью. Терминальные не трогает. */
 function reconcile(job) {
   if (!job?.id || TERMINAL.has(job.status)) return job;
 
   const code = readExitCode(job.id);
   if (code !== null) {
-    job.status = code === 0 ? "done" : "failed";
+    const mapped = NOTE_STATUS[readNote(job.id)];
+    job.status = mapped ? mapped[0] : code === 0 ? "done" : "failed";
+    if (mapped) job.note = mapped[1];
     job.exitCode = code;
     job.finishedAt = job.finishedAt || new Date().toISOString();
     return writeJob(job);
@@ -518,25 +546,15 @@ function reconcile(job) {
     return writeJob(job);
   }
 
-  const limit = (Number(envClean("CODEX_BRIDGE_JOB_TIMEOUT_MIN")) || 30) * 60_000;
+  // Страховка на случай, если воркер умер, не успев отработать свой таймер.
+  const limit = jobTimeoutMs();
   if (Date.now() - new Date(job.startedAt).getTime() > limit) {
-    killGroup(job.pid);
+    killTree(job.pid);
     job.status = "timeout";
     job.finishedAt = new Date().toISOString();
     return writeJob(job);
   }
   return job;
-}
-
-function killGroup(pid) {
-  if (!Number.isInteger(pid) || pid <= 1) return;
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {}
-  }
 }
 
 export function listJobs(cwd) {
@@ -594,17 +612,149 @@ export function jobAnswer(id) {
   return extractOutput(jobOutput(id)).text;
 }
 
+/** id треда Codex для этой задачи — чтобы продолжить разговор. */
+export function jobThreadId(id) {
+  return threadIdOf(jobOutput(id));
+}
+
 export function cancelJob(id) {
   if (!isValidJobId(id)) return { ok: false, error: `Недопустимый идентификатор задачи: ${id}` };
   const job = readJob(id);
   if (!job) return { ok: false, error: `Задача ${id} не найдена.` };
   if (TERMINAL.has(job.status)) return { ok: true, job, note: `Уже в статусе ${job.status}.` };
 
-  killGroup(job.pid);
+  killTree(job.pid);
   job.status = "cancelled";
   job.finishedAt = new Date().toISOString();
   writeJob(job); // cancelled терминален — reconcile его больше не тронет
   return { ok: true, job };
+}
+
+// ------------------------------------------------------- наблюдение за задачей
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Читает журнал задачи по мере появления строк и отдаёт события наружу.
+ *
+ * Это замена прежнему spawnSync: он блокировал event loop MCP-сервера на всё
+ * время работы Codex, из-за чего сервер не отвечал на ping и клиент рвал
+ * соединение с "Connection closed". Здесь ожидание асинхронное, а работу ведёт
+ * отдельный процесс — поэтому истечение waitMs не отменяет и не перезапускает
+ * задачу, она просто продолжает идти в фоне.
+ */
+export async function followJob(id, { timeoutMs = 0, onEvent, signal, pollMs = 200 } = {}) {
+  const file = jobPath(id, "out");
+  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
+  let offset = 0;
+  let tail = "";
+  const events = [];
+
+  const drain = () => {
+    let chunk = "";
+    try {
+      const fd = fs.openSync(file, "r");
+      try {
+        const size = fs.fstatSync(fd).size;
+        if (size > offset) {
+          const buf = Buffer.alloc(size - offset);
+          fs.readSync(fd, buf, 0, buf.length, offset);
+          offset = size;
+          chunk = buf.toString("utf8");
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return; // файла ещё нет — воркер не успел создать
+    }
+    tail += chunk;
+    const lines = tail.split("\n");
+    tail = lines.pop() ?? ""; // последняя строка может быть недописана
+    for (const line of lines) {
+      const e = parseLine(line);
+      if (!e) continue;
+      events.push(e);
+      if (onEvent) {
+        try {
+          onEvent(e);
+        } catch {}
+      }
+    }
+  };
+
+  for (;;) {
+    drain();
+    if (readExitCode(id) !== null) {
+      drain(); // последние строки могли лечь между чтением и завершением
+      return { finished: true, timedOut: false, aborted: false, events };
+    }
+    if (signal?.aborted) return { finished: false, timedOut: false, aborted: true, events };
+    if (Date.now() >= deadline) return { finished: false, timedOut: true, aborted: false, events };
+    await sleep(pollMs);
+  }
+}
+
+/** Результат завершённой задачи в том же виде, что и раньше у runSync. */
+export function jobResult(id) {
+  const job = resolveJob(id);
+  if (!job) return { ok: false, error: "Задача не найдена." };
+
+  const raw = jobOutput(id);
+  const parsed = extractOutput(raw);
+  const out = denoise(parsed.text);
+  const trail = progressTrail(parsed.events, { limit: 8 });
+  // Всё, что не JSON — это stderr Codex: там и лежат объяснимые отказы.
+  const noise = denoise(
+    raw
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("{"))
+      .join("\n")
+  );
+
+  if (job.status === "done") return { ok: true, job, output: out, stderr: noise, trail };
+  if (job.status === "running") return { ok: false, job, running: true, trail, error: "Задача ещё выполняется." };
+
+  // Ненулевой код — всегда ошибка, даже если что-то успело напечататься:
+  // частичный отчёт, выданный за успех, опаснее пустого отказа.
+  const reason = job.note || explainCodexFailure(noise, out);
+  return {
+    ok: false,
+    job,
+    exitCode: job.exitCode,
+    partialOutput: out || null,
+    reason,
+    trail,
+    error:
+      (reason ? `${reason}\n\n` : "") +
+      `Codex завершился со статусом ${job.status}${job.exitCode === null ? "" : ` (код ${job.exitCode})`}.` +
+      (noise ? `\n${noise.slice(0, 800)}` : "") +
+      (trail.length ? `\n\nХод работы:\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
+      (out && !reason ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
+  };
+}
+
+/**
+ * Полный цикл: запустить задачу и подождать её ответ, отдавая события по ходу.
+ * Не уложились в waitMs — задача остаётся жить, возвращается её id.
+ */
+export async function runJob(opts, { waitMs = 120_000, onEvent, signal } = {}) {
+  const job = startJob(opts);
+  const f = await followJob(job.id, { timeoutMs: waitMs, onEvent, signal });
+  if (f.aborted) {
+    cancelJob(job.id);
+    return { ok: false, aborted: true, job, trail: progressTrail(f.events, { limit: 8 }) };
+  }
+  if (!f.finished) {
+    return { ok: false, timedOut: true, job, trail: progressTrail(f.events, { limit: 8 }) };
+  }
+  const r = jobResult(job.id);
+  return { ...r, job: r.job || job }; // статус берём после reconcile, а не из момента запуска
+}
+
+/** Нормализованная лента задачи — для показа хода работы. */
+export function jobTrail(id, { limit = 40 } = {}) {
+  return normalizeStream(jobOutput(id)).slice(-limit);
 }
 
 export function humanAge(iso) {

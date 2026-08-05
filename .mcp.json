@@ -8,8 +8,10 @@
       "env": {
         "CODEX_BRIDGE_MODEL": "${user_config.default_model}",
         "CODEX_BRIDGE_EFFORT": "${user_config.default_effort}",
+        "CODEX_BRIDGE_REASONING_SUMMARY": "${user_config.reasoning_summary}",
         "CODEX_BRIDGE_JOB_TIMEOUT_MIN": "${user_config.job_timeout_minutes}",
-        "CODEX_BRIDGE_BYPASS_SANDBOX": "${user_config.bypass_sandbox}"
+        "CODEX_BRIDGE_BYPASS_SANDBOX": "${user_config.bypass_sandbox}",
+        "CODEX_BRIDGE_PROGRESS": "${user_config.progress_notifications}"
       }
     },
     "image": {
@@ -20,7 +22,8 @@
       "env": {
         "CODEX_BRIDGE_IMAGE_DIR": "${user_config.image_output_dir}",
         "CODEX_BRIDGE_IMAGE_TIMEOUT_MIN": "${user_config.image_timeout_minutes}",
-        "CODEX_BRIDGE_BYPASS_SANDBOX": "${user_config.bypass_sandbox}"
+        "CODEX_BRIDGE_BYPASS_SANDBOX": "${user_config.bypass_sandbox}",
+        "CODEX_BRIDGE_PROGRESS": "${user_config.progress_notifications}"
       }
     }
   }

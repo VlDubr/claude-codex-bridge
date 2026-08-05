@@ -28,12 +28,17 @@ claude-codex-bridge/
 │   ├── plugin.json          manifest, userConfig, defaultEnabled: false
 │   └── marketplace.json     single-plugin catalog, source: "."
 ├── .mcp.json                registers the codex and image servers
-├── commands/                11 slash commands (prompt templates)
-├── agents/                  gpt-delegate, gpt-advisor, image-smith
+├── commands/                13 slash commands (prompt templates)
+├── agents/                  gpt-delegate, gpt-advisor, gpt-chat, image-smith
 ├── hooks/hooks.json         SessionStart → preflight
 ├── scripts/
 │   ├── mcp-lib.mjs          MCP transport (server side): JSON-RPC over stdio
 │   ├── codex-core.mjs       codex exec wrapper, capabilities, job manager
+│   ├── job-worker.mjs       one process per Codex run
+│   ├── proc.mjs             portable process-tree termination
+│   ├── chat-store.mjs       conversation threads, per-thread lock
+│   ├── prefs.mjs            default model and effort per repository
+│   ├── statusline.mjs       status line: what the jobs are doing now
 │   ├── mcp-codex.mjs        MCP server, Claude → GPT
 │   ├── codex-health.mjs           диагностика установки Codex, рассинхрон версий
 │   ├── codex-events.mjs           разбор JSONL-потока событий codex exec --json
@@ -47,7 +52,7 @@ claude-codex-bridge/
 │   ├── mcp-claude.mjs       MCP server, GPT → Claude
 │   ├── mcp-client.mjs       MCP client for connecting to Claude's servers
 │   └── tool-proxy.mjs       allowlist, server discovery, re-export
-└── tests/regressions.mjs    27 regression tests
+└── tests/regressions.mjs    59 regression tests
 ```
 
 ---
@@ -98,7 +103,31 @@ The same class of mistake as with models — I just managed to make it twice: th
 
 The flag is added only when capability detection finds it. Without it `extractOutput()` returns the raw text unchanged, so an older Codex degrades to the previous behaviour rather than losing the answer.
 
-`codex_ask` no longer dies on timeout. It waits `wait_seconds` (90 by default), and if the model is still working it restarts the same request as a background job and returns the trail collected so far. The work isn't thrown away and the user isn't asked to retry from scratch.
+`codex_ask` does not die on timeout. It waits `wait_seconds` (90 by default) and, if the model is still working, returns the job id along with the trail collected so far. The request is **not** restarted: a separate worker process has been doing the work from the start, and waiting is just reading its log.
+
+While the call is in flight, every meaningful event goes to the client as `notifications/progress` with a monotonic counter and the token from `_meta.progressToken`. Without a token nothing is sent — there is nowhere to address it. The reverse direction works too: `notifications/cancelled` aborts the handler through an `AbortSignal`, the job is stopped, and no response is sent for the cancelled call.
+
+Only reasoning *summaries* leave Codex; full chain-of-thought is not exposed. With `model_reasoning_summary="auto"` there may be no summaries at all, hence the `reasoning_summary` setting.
+
+### Process model
+
+One path for both synchronous and background calls:
+
+```
+MCP call ──► job-worker.mjs ──► codex exec ──► the job's JSONL log
+                                                   ▲
+                       followJob() reads the log ──┘ and emits progress
+```
+
+There used to be two paths, both broken. `spawnSync` blocked the MCP server's event loop for the entire Codex run — the server stopped answering `ping` and the client dropped the connection with `MCP error -32000: Connection closed`. `/bin/sh` does not exist on Windows: a background job died before its first line of output and stayed in `unknown` forever.
+
+The worker is portable (`node job-worker.mjs`), timestamps events on receipt (Codex does not send timestamps), writes the exit code atomically, and leaves a note explaining how it ended: `timeout`, `cancelled`, `spawn_failed`. `reconcile()` turns that note into a status — otherwise a cancellation and a timeout would both look like a plain failed run. The process tree is killed via `taskkill /T` on Windows and via the process group on POSIX (`proc.mjs`).
+
+### Talking to a model
+
+`codex exec resume <thread_id>` continues an earlier thread; the id comes from the `thread.started` event. Important: `exec resume` has no `--sandbox`, no `--cd`, and no `--ask-for-approval` — the sandbox mode is set through `-c sandbox_mode=...` and the working directory is the process's own. Model and reasoning effort must be passed on every turn: without them Codex silently falls back to the current defaults and the conversation drifts to a different model.
+
+`chat-store.mjs` keeps the thread and its parameters. The lock is a directory (`mkdir` is atomic everywhere): two concurrent `resume` calls on one thread write into the same rollout and destroy the conversation. A missing thread is an explicit error — silently starting a new conversation would lose the whole prior exchange without warning.
 
 ### Background job manager
 
