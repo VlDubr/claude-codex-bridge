@@ -42,22 +42,59 @@ const firstLine = (s) =>
 
 const clip = (s, n = 100) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-/** Событие → строка для человека, или null если показывать нечего. */
-export function describe(e) {
-  if (e.type === "turn.started") return "начал обдумывать задачу";
+// Верхняя граница для detail: события вроде command_execution несут весь вывод
+// команды, а mcp_tool_call — целиком результат инструмента. Держать это в
+// памяти целиком незачем, а отдавать наружу — тем более.
+const DETAIL_MAX = 4000;
+const detailOf = (s) => {
+  const t = String(s || "").trim();
+  if (!t) return null;
+  return t.length > DETAIL_MAX ? `${t.slice(0, DETAIL_MAX)}\n[… обрезано]` : t;
+};
+
+const cmdOf = (it) => String(it.command || "").replace(/^bash -lc\s*/, "");
+
+/**
+ * Событие Codex → единая структура для показа.
+ *
+ * kind: status | reasoning | command | file | mcp | web | todo | message | error
+ * title — одна строка для ленты, detail — содержимое целиком (усечённое).
+ * Возвращает null, если показывать нечего.
+ */
+export function normalize(e) {
+  if (!e || typeof e.type !== "string") return null;
+  const ts = e._ts || null;
+  const at = (o) => ({ ts, ...o });
+
+  if (e.type === "thread.started") {
+    const id = e.thread_id || e.thread?.id || null;
+    return at({ kind: "status", title: "сессия открыта", detail: id, threadId: id });
+  }
+  if (e.type === "turn.started") return at({ kind: "status", title: "начал обдумывать задачу", detail: null });
   if (e.type === "turn.completed") {
     const u = e.usage || {};
-    const bits = [u.input_tokens && `вход ${u.input_tokens}`, u.output_tokens && `выход ${u.output_tokens}`]
+    const bits = [
+      u.input_tokens && `вход ${u.input_tokens}`,
+      u.output_tokens && `выход ${u.output_tokens}`,
+      u.reasoning_output_tokens && `размышления ${u.reasoning_output_tokens}`,
+    ]
       .filter(Boolean)
       .join(", ");
-    return `завершил${bits ? ` (${bits} токенов)` : ""}`;
+    return at({ kind: "status", title: `завершил${bits ? ` (${bits} токенов)` : ""}`, detail: null, usage: u });
   }
   if (e.type === "turn.failed") {
-    return `сбой: ${clip(e.error?.message || e.message || "без описания", 200)}`;
+    const msg = e.error?.message || e.message || "без описания";
+    return at({ kind: "error", title: `сбой: ${clip(msg, 200)}`, detail: detailOf(msg), fatal: true });
   }
   if (e.type === "error") {
     const msg = e.message || e.error?.message || "";
-    return /reconnect/i.test(msg) ? `переподключение (${clip(msg, 40)})` : `ошибка: ${clip(msg, 200)}`;
+    const transient = /reconnect/i.test(msg);
+    return at({
+      kind: transient ? "status" : "error",
+      title: transient ? `переподключение (${clip(msg, 40)})` : `ошибка: ${clip(msg, 200)}`,
+      detail: detailOf(msg),
+      fatal: !transient,
+    });
   }
 
   const it = e.item;
@@ -65,34 +102,110 @@ export function describe(e) {
   // В разных версиях поле называется type или item_type
   const kind = it.type || it.item_type;
   const started = e.type === "item.started";
+  const done = e.type === "item.completed";
 
   switch (kind) {
-    case "reasoning":
-      return it.text ? `размышляет: ${clip(firstLine(it.text))}` : null;
+    case "reasoning": {
+      const textRaw = String(it.text || it.summary || "").trim();
+      if (!textRaw) return null;
+      // Сводка reasoning — самая ценная часть ленты, поэтому в detail она
+      // уходит целиком: раньше от неё оставались первые 100 символов.
+      return at({ kind: "reasoning", title: `размышляет: ${clip(firstLine(textRaw), 120)}`, detail: detailOf(textRaw) });
+    }
     case "command_execution": {
-      const cmd = clip(String(it.command || "").replace(/^bash -lc\s*/, ""), 80);
-      if (started) return `запускает: ${cmd}`;
+      const cmd = cmdOf(it);
+      if (started) return at({ kind: "command", title: `запускает: ${clip(cmd, 80)}`, detail: detailOf(cmd) });
       const code = it.exit_code;
-      return `выполнил: ${cmd}${code === 0 || code === undefined || code === null ? "" : ` (код ${code})`}`;
+      const bad = !(code === 0 || code === undefined || code === null);
+      return at({
+        kind: "command",
+        title: `выполнил: ${clip(cmd, 80)}${bad ? ` (код ${code})` : ""}`,
+        detail: detailOf(it.aggregated_output || it.output || cmd),
+        exitCode: code ?? null,
+      });
     }
     case "file_change": {
-      const files = (it.changes || []).map((c) => c.path || c.file).filter(Boolean);
-      return files.length ? `правит файлы: ${clip(files.join(", "), 120)}` : "правит файлы";
+      const changes = it.changes || [];
+      const files = changes.map((c) => c.path || c.file).filter(Boolean);
+      return at({
+        kind: "file",
+        title: files.length ? `правит файлы: ${clip(files.join(", "), 120)}` : "правит файлы",
+        detail: detailOf(changes.map((c) => `${c.kind || "change"} ${c.path || c.file || "?"}`).join("\n")),
+        files,
+      });
     }
-    case "mcp_tool_call":
-      return `вызывает инструмент: ${it.server ? `${it.server}/` : ""}${it.tool || it.name || "?"}`;
+    case "mcp_tool_call": {
+      const name = `${it.server ? `${it.server}/` : ""}${it.tool || it.name || "?"}`;
+      return at({
+        kind: "mcp",
+        title: `${started ? "вызывает" : "вызвал"} инструмент: ${name}`,
+        // Аргументы и результат чужого инструмента могут содержать секреты и
+        // мегабайты вывода — наружу отдаём только имя и признак ошибки.
+        detail: it.error ? detailOf(String(it.error?.message || it.error)) : null,
+        failed: Boolean(it.error),
+      });
+    }
     case "web_search":
-      return `ищет в вебе: ${clip(it.query || "", 80)}`;
+      return at({ kind: "web", title: `ищет в вебе: ${clip(it.query || "", 80)}`, detail: detailOf(it.query) });
     case "todo_list": {
       const items = it.items || it.todos || [];
-      const done = items.filter((x) => x.completed || x.status === "completed").length;
-      return items.length ? `план: ${done}/${items.length} выполнено` : null;
+      if (!items.length) return null;
+      const doneCount = items.filter((x) => x.completed || x.status === "completed").length;
+      return at({
+        kind: "todo",
+        title: `план: ${doneCount}/${items.length} выполнено`,
+        detail: detailOf(
+          items.map((x) => `${x.completed || x.status === "completed" ? "[x]" : "[ ]"} ${x.text || x.title || ""}`).join("\n")
+        ),
+      });
     }
-    case "agent_message":
-      return started ? "формулирует ответ" : null; // сам ответ показываем отдельно
+    case "collab_tool_call": {
+      const name = it.tool || it.name || it.agent || "субагент";
+      return at({ kind: "mcp", title: `${started ? "передаёт" : "получил от"} субагента: ${name}`, detail: null });
+    }
+    case "agent_message": {
+      if (started) return at({ kind: "status", title: "формулирует ответ", detail: null });
+      const textRaw = String(it.text || "").trim();
+      if (!textRaw) return null;
+      // Промежуточные сообщения — это реплики по ходу работы; какое из них
+      // финальное, знает только конец потока (см. finalMessage).
+      return at({ kind: "message", title: `говорит: ${clip(firstLine(textRaw), 120)}`, detail: detailOf(textRaw) });
+    }
+    case "error": {
+      const msg = String(it.message || it.text || "").trim();
+      if (!msg) return null;
+      // item-ошибка нефатальна: turn при этом продолжается
+      return at({ kind: "error", title: `предупреждение: ${clip(msg, 160)}`, detail: detailOf(msg), fatal: false });
+    }
     default:
-      return started ? `${kind}` : null;
+      return started && kind ? at({ kind: "status", title: String(kind), detail: null }) : null;
   }
+}
+
+/** Событие → строка для человека, или null если показывать нечего. */
+export function describe(e) {
+  return normalize(e)?.title ?? null;
+}
+
+/** Нормализованные записи потока, в порядке появления. */
+export function normalizeStream(raw) {
+  const events = Array.isArray(raw) ? raw : parseStream(raw);
+  const out = [];
+  for (const e of events) {
+    const n = normalize(e);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+/** id треда Codex — нужен, чтобы продолжить разговор через `exec resume`. */
+export function threadIdOf(raw) {
+  const events = Array.isArray(raw) ? raw : parseStream(raw);
+  for (const e of events) {
+    const id = e.type === "thread.started" ? e.thread_id || e.thread?.id : null;
+    if (id) return String(id);
+  }
+  return null;
 }
 
 /** Итоговый ответ агента — последнее agent_message в потоке. */
@@ -120,14 +233,11 @@ export function extractOutput(raw) {
 
 /** Компактная лента прогресса: что модель делала, в порядке появления. */
 export function progressTrail(raw, { limit = 12 } = {}) {
-  const events = Array.isArray(raw) ? raw : parseStream(raw);
   const lines = [];
-  for (const e of events) {
-    const d = describe(e);
-    if (!d) continue;
+  for (const n of normalizeStream(raw)) {
     // Не повторяем подряд одинаковые строки — Codex шлёт item.updated пачками
-    if (lines[lines.length - 1] === d) continue;
-    lines.push(d);
+    if (lines[lines.length - 1] === n.title) continue;
+    lines.push(n.title);
   }
   return lines.slice(-limit);
 }

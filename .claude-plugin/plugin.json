@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",
@@ -31,6 +31,12 @@
       "type": "string",
       "title": "Reasoning effort по умолчанию",
       "description": "Уровень reasoning. Набор зависит от модели — точный список показывает /codex-bridge:models. Значение minimal принимают только модели прошлых поколений; gpt-5.6 и новее его отвергают.",
+      "required": false
+    },
+    "reasoning_summary": {
+      "type": "string",
+      "title": "Сводки размышлений",
+      "description": "auto — как решит Codex (сводок может не быть вовсе), detailed — подробные сводки в ленте хода работы. Полные рассуждения модели недоступны ни при каком значении.",
       "required": false
     },
     "job_timeout_minutes": {

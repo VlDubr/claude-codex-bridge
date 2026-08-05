@@ -60,7 +60,25 @@ Long-running calls don't sit behind a blind timeout. Codex streams its activity 
   · размышляет: Проверяю гонку при повторной доставке
 ```
 
-If a synchronous `codex_ask` runs past its wait budget, it doesn't fail — the work moves to the background and you get a job id plus everything the model managed to do so far.
+The same trail streams into Claude Code while the call is in flight: Codex's steps show up next to the tool call as they happen, instead of arriving in one lump at the end.
+
+If a synchronous `codex_ask` runs past its wait budget, it doesn't fail and nothing is lost — the very same job keeps running in the same process in the background, and you get its id plus everything the model managed to do so far. Cancelling the call in Claude stops Codex too.
+
+One caveat: Codex emits reasoning *summaries*, not full chain-of-thought. With `reasoning_summary = auto` there may be no summaries at all — set `detailed` if you want a verbose trail.
+
+### Talking to Codex models
+
+Codex models are available as separate interlocutors: the thread persists and the model remembers earlier turns.
+
+```
+/codex-bridge:use gpt-5.6-sol
+/codex-bridge:chat --chat retry walk through the retry logic in src/webhook
+/codex-bridge:chat --chat retry and what happens on redelivery?
+```
+
+One chat name is one continuous thread. Model and reasoning level are set on the first turn and repeat automatically after that. `--write` lets the model change files; read-only otherwise. List conversations with `codex_chats`.
+
+An honest limitation: a plugin cannot add Codex models to Claude Code's `/model` — there is no API for registering a model provider. You reach them through `/codex-bridge:chat` or the `codex-bridge:gpt-chat` subagent.
 
 ### Two models working together
 
@@ -130,10 +148,24 @@ On enable, Claude Code prompts for a few values — all optional:
 |---|---|
 | `default_model` | Default Codex model. See `/codex-bridge:models` for the list |
 | `default_effort` | Reasoning level: `low`, `medium`, `high`, `xhigh`, `max`. The exact set depends on the model — see `/codex-bridge:models` |
+| `reasoning_summary` | `detailed` — verbose reasoning summaries in the trail, `auto` — Codex decides (there may be none) |
 | `job_timeout_minutes` | When to kill a stuck background job (default 30) |
 | `image_output_dir` | Where images go (default `assets/generated`) |
 | `image_timeout_minutes` | Image generation timeout (default 15) |
 | `bypass_sandbox` | Emergency escape hatch for a broken Codex sandbox. Off by default — see Troubleshooting |
+
+### Status line
+
+What the Codex models are doing right now can go into the Claude Code status line. The plugin does not wire it up itself: `statusLine` is a single setting for the whole installation, and silently overwriting someone's own is not acceptable. Add to `settings.json`:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "node ~/.claude/plugins/cache/<marketplace>/codex-bridge/<version>/scripts/statusline.mjs"
+}
+```
+
+The line stays empty when nothing is running.
 
 ### The GPT → Claude bridge
 
@@ -177,12 +209,14 @@ Only what you list is proxied. A tool left out of `--tools` simply does not exis
 | `/codex-bridge:result [id]` | Output of a finished job |
 | `/codex-bridge:cancel [id]` | Cancel a running job |
 | `/codex-bridge:ask <question>` | A second opinion from GPT, right now |
+| `/codex-bridge:chat [--model M] [--chat name] [--write] <message>` | A conversation with a Codex model; the thread remembers earlier turns |
+| `/codex-bridge:use [model] [--effort level]` | Default Codex model for this repository |
 | `/codex-bridge:debate <topic>` | Multi-round Claude ↔ GPT argument |
 | `/codex-bridge:image <description>` | gpt-image-2 image with result verification |
 | `/codex-bridge:models [--refresh]` | Models actually available in this Codex |
 | `/codex-bridge:setup [flags]` | Diagnostics, reverse bridge, tool proxying |
 
-Slash commands aren't the only entry point. Claude reaches for the same capabilities on its own when the context calls for it. There are subagents too: `@codex-bridge:gpt-advisor` for a second opinion, `@codex-bridge:gpt-delegate` for handing off work, `@codex-bridge:image-smith` for a longer generate-and-verify loop.
+Slash commands aren't the only entry point. Claude reaches for the same capabilities on its own when the context calls for it. There are subagents too: `@codex-bridge:gpt-advisor` for a second opinion, `@codex-bridge:gpt-delegate` for handing off work, `@codex-bridge:gpt-chat` for a conversation with a specific Codex model, `@codex-bridge:image-smith` for a longer generate-and-verify loop.
 
 ## Models
 

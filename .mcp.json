@@ -8,6 +8,7 @@
       "env": {
         "CODEX_BRIDGE_MODEL": "${user_config.default_model}",
         "CODEX_BRIDGE_EFFORT": "${user_config.default_effort}",
+        "CODEX_BRIDGE_REASONING_SUMMARY": "${user_config.reasoning_summary}",
         "CODEX_BRIDGE_JOB_TIMEOUT_MIN": "${user_config.job_timeout_minutes}",
         "CODEX_BRIDGE_BYPASS_SANDBOX": "${user_config.bypass_sandbox}"
       }
