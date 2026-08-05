@@ -143,13 +143,21 @@ const TOOLS = [
   {
     name: "codex_delegate",
     description:
-      "Делегировать GPT задачу с правом изменять файлы: исследовать баг, починить тест, отрефакторить кусок. Всегда в фоне. Возвращает job_id.",
+      "Делегировать GPT задачу с правом изменять файлы: исследовать баг, починить тест, отрефакторить кусок. " +
+      "Показывает ленту хода работы, пока ждёт; если GPT не уложился, работа продолжается в фоне и возвращается job_id.",
     inputSchema: {
       type: "object",
       properties: {
         task: { type: "string", description: "Описание задачи для GPT, максимально конкретное." },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
+        wait_seconds: {
+          type: "number",
+          default: 120,
+          description:
+            "Сколько ждать с показом ленты действий GPT. Ноль — сразу уйти в фон и вернуть job_id. " +
+            "По истечении вызов не падает: та же работа продолжается тем же процессом.",
+        },
       },
       required: ["task"],
     },
@@ -500,10 +508,26 @@ async function handleTool(name, args, ctx = {}) {
 
     case "codex_delegate": {
       if (!args.task) return err("Нужно поле task.");
-      const job = startJob({ mode: "delegate", cwd, ...args, ...applyDefaults(args, cwd) });
-      return text(
-        `Задача делегирована GPT: ${job.id}\nGPT работает в рабочей директории и может менять файлы. Следить: codex_progress.`
-      );
+      const spec = { mode: "delegate", cwd, ...args, ...applyDefaults(args, cwd) };
+      // Ноль — прежнее поведение: сразу в фон, без ожидания.
+      const waitMs = args.wait_seconds === undefined ? 120_000 : Math.max(0, Number(args.wait_seconds) || 0) * 1000;
+      if (waitMs <= 0) {
+        const job = startJob(spec);
+        return text(
+          `Задача делегирована GPT: ${job.id}\nGPT работает в рабочей директории и может менять файлы. Следить: codex_progress.`
+        );
+      }
+      const r = await runJob(spec, { waitMs, onEvent: notifier(ctx), signal: ctx.signal });
+      if (r.aborted) return text(`Вызов отменён, задача ${r.job.id} остановлена.`);
+      if (r.timedOut) {
+        return text(
+          `GPT не уложился в ${Math.round(waitMs / 1000)}с — та же работа продолжается в фоне: ${r.job.id}\n\n` +
+            `${renderTrail(jobTrail(r.job.id, { limit: 20 }))}\n\n` +
+            `Смотри ход работы: codex_progress. Забрать результат: codex_result.`
+        );
+      }
+      if (!r.ok) return err(r.error);
+      return text(renderRun(r.job.id, r.output));
     }
 
     case "codex_models": {
