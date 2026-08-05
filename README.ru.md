@@ -149,6 +149,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 | `default_model` | Модель Codex по умолчанию. Список — `/codex-bridge:models` |
 | `default_effort` | Уровень reasoning: `low`, `medium`, `high`, `xhigh`, `max`. Точный набор зависит от модели — см. `/codex-bridge:models` |
 | `reasoning_summary` | `detailed` — подробные сводки размышлений в ленте, `auto` — как решит Codex (сводок может не быть) |
+| `progress_notifications` | Показывать ход работы прямо во время вызова. Выключите, если ваша сборка Claude Code рвёт соединение на таких уведомлениях — см. «Если что-то пошло не так» |
 | `job_timeout_minutes` | Через сколько убивать зависшую фоновую задачу (по умолчанию 30) |
 | `image_output_dir` | Куда складывать изображения (по умолчанию `assets/generated`) |
 | `image_timeout_minutes` | Таймаут генерации картинки (по умолчанию 15) |
@@ -251,6 +252,8 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 **«Модель не принимает уровень усилий»** — набор уровней зависит от модели. `minimal` принимают только модели прошлых поколений, `gpt-5.6` и новее отвергают его ошибкой API. Посмотрите доступные уровни командой `/codex-bridge:models` — они показаны рядом с каждой моделью, — и возьмите `low` или выше.
 
 **`failed to load models cache: missing field ...` в логах Codex** — рассинхрон формата внутреннего кэша самого Codex, на работу не влияет. Плагин отфильтровывает эту строку из сообщений об ошибках, чтобы она не маскировала настоящую причину.
+
+**`MCP error -32000: Connection closed` на длинных вызовах** — у части сборок Claude Code получение `notifications/progress` закрывает соединение с MCP-сервером ([anthropics/claude-code#47378](https://github.com/anthropics/claude-code/issues/47378), [#53617](https://github.com/anthropics/claude-code/issues/53617)). Выключите настройку `progress_notifications` — лента исчезнет, всё остальное продолжит работать. Отрисовка ленты в свёрнутом виде инструмента появилась в Claude Code 2.1.153.
 
 **На Windows: `orchestrator_helper_launch_failed` / `program not found` либо необъяснимое «user cancelled MCP tool call»** — не запустилась песочница Codex. Наружу это выходит как отказ MCP-инструмента или отмена пользователем, поэтому читается как мёртвый мост, хотя мост исправен. Обычная причина — установка Codex собрана из разных версий: CLI одной, а хелперы в `~/.codex/.sandbox-bin` другой. Запустите `/codex-bridge:setup` — он сверяет версии и называет расхождение. Решение — переустановить Codex (`npm install -g @openai/codex`). Как временный обход можно включить настройку `bypass_sandbox`, но тогда Codex выполняет команды без изоляции.
 

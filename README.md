@@ -149,6 +149,7 @@ On enable, Claude Code prompts for a few values — all optional:
 | `default_model` | Default Codex model. See `/codex-bridge:models` for the list |
 | `default_effort` | Reasoning level: `low`, `medium`, `high`, `xhigh`, `max`. The exact set depends on the model — see `/codex-bridge:models` |
 | `reasoning_summary` | `detailed` — verbose reasoning summaries in the trail, `auto` — Codex decides (there may be none) |
+| `progress_notifications` | Stream the work trail while the call is running. Turn it off if your Claude Code build drops the connection on such notifications — see Troubleshooting |
 | `job_timeout_minutes` | When to kill a stuck background job (default 30) |
 | `image_output_dir` | Where images go (default `assets/generated`) |
 | `image_timeout_minutes` | Image generation timeout (default 15) |
@@ -251,6 +252,9 @@ Note that `/codex-bridge:image` takes 4–6 minutes — Codex reasons first and 
 **"The model doesn't accept effort level X"** — the available levels depend on the model. `minimal` is only accepted by earlier generations; `gpt-5.6` and newer reject it with an API error. Check `/codex-bridge:models`, which lists the levels next to each model, and use `low` or higher.
 
 **`failed to load models cache: missing field ...` in Codex logs** — a format mismatch in Codex's own internal cache. It doesn't affect anything. The plugin filters this line out of error messages so it can't mask the real cause.
+
+
+**`MCP error -32000: Connection closed` on long calls** — on some Claude Code builds, receiving `notifications/progress` closes the MCP server connection ([anthropics/claude-code#47378](https://github.com/anthropics/claude-code/issues/47378), [#53617](https://github.com/anthropics/claude-code/issues/53617)). Turn off the `progress_notifications` setting — the live trail goes away, everything else keeps working. Trail rendering in the collapsed tool view landed in Claude Code 2.1.153.
 
 **On Windows: `orchestrator_helper_launch_failed` / `program not found`, or an unexplained "user cancelled MCP tool call"** — Codex's sandbox failed to start. This surfaces as an MCP failure or a user cancellation, so it reads like a dead bridge when the bridge is fine. The usual cause is a mixed Codex installation: the CLI is one version while the helpers in `~/.codex/.sandbox-bin` are another. Run `/codex-bridge:setup` — it compares the versions and names the mismatch. The fix is reinstalling Codex (`npm install -g @openai/codex`). As a stopgap you can enable the `bypass_sandbox` setting, but then Codex runs commands without isolation.
 

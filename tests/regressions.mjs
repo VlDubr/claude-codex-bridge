@@ -1102,6 +1102,24 @@ await t("20a. прогресс идёт с монотонным счётчико
   );
 });
 
+await t("20c. лента прогресса выключается настройкой", async () => {
+  const d = fresh("progress-off");
+  const srv = progressServer(d);
+  // Известный дефект части сборок Claude Code: получение notifications/progress
+  // закрывает соединение (anthropics/claude-code#47378). Выключатель нужен,
+  // чтобы это лечилось настройкой, а не правкой кода.
+  const out = await talk(
+    srv,
+    [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "work", arguments: {}, _meta: { progressToken: "tok" } } },
+    ],
+    { CODEX_BRIDGE_PROGRESS: "false" }
+  );
+  assert.equal(out.filter((m) => m.method === "notifications/progress").length, 0, "уведомления идут при выключенной ленте");
+  assert.ok(out.some((m) => m.id === 2 && m.result), "сам вызов перестал отвечать");
+});
+
 await t("20b. отмена доходит до обработчика и ответ не отправляется", async () => {
   const d = fresh("cancel-mcp");
   const srv = progressServer(d);

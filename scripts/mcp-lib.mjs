@@ -13,6 +13,20 @@ const PROTOCOL = SUPPORTED[0];
 // а поток уведомлений в клиенте — тоже ресурс.
 const PROGRESS_MIN_INTERVAL_MS = 250;
 
+/**
+ * Аварийный выключатель ленты прогресса.
+ *
+ * У части сборок Claude Code есть известный дефект: получив notifications/progress,
+ * клиент закрывает stdin сервера, и следующий вызов падает с
+ * "MCP error -32000: Connection closed" (anthropics/claude-code#47378, #53617).
+ * Отрисовка прогресса в свёрнутом виде инструмента починена в 2.1.153, но если
+ * версия клиента задета дефектом, лента должна выключаться без правки кода.
+ */
+const progressEnabled = () => {
+  const v = String(process.env.CODEX_BRIDGE_PROGRESS ?? "").trim().toLowerCase();
+  return !(v === "off" || v === "false" || v === "0" || v === "no");
+};
+
 export const text = (s) => ({ content: [{ type: "text", text: String(s) }] });
 export const fail = (s) => ({ content: [{ type: "text", text: String(s) }], isError: true });
 
@@ -44,6 +58,7 @@ export function serve({ name, version = "0.1.0", tools, handle }) {
     return {
       notify(message) {
         if (closed || token === undefined || token === null || !message) return;
+        if (!progressEnabled()) return;
         const wait = PROGRESS_MIN_INTERVAL_MS - (Date.now() - lastAt);
         if (wait <= 0) return emit(message);
         pending = message; // в пачке важен последний шаг, а не каждый промежуточный

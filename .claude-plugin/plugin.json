@@ -39,6 +39,13 @@
       "description": "auto — как решит Codex (сводок может не быть вовсе), detailed — подробные сводки в ленте хода работы. Полные рассуждения модели недоступны ни при каком значении.",
       "required": false
     },
+    "progress_notifications": {
+      "type": "boolean",
+      "title": "Показывать ход работы во время вызова",
+      "description": "Лента действий Codex отправляется клиенту как notifications/progress. Выключите, если ваша сборка Claude Code задета дефектом anthropics/claude-code#47378: там получение таких уведомлений закрывает соединение с MCP-сервером и следующий вызов падает с \"Connection closed\".",
+      "default": true,
+      "required": false
+    },
     "job_timeout_minutes": {
       "type": "number",
       "title": "Таймаут фоновой задачи (мин)",
