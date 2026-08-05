@@ -1155,11 +1155,11 @@ await t("21b. параллельный ход по одному треду бл�
 
   let released = false;
   const first = store.withChatLock("t", async () => {
-    await sleep(400);
+    await sleep(1500);
     released = true;
     return "ok";
   });
-  await sleep(80);
+  await sleep(150);
   let busy = null;
   try {
     await store.withChatLock("t", async () => "второй");
