@@ -57,6 +57,8 @@ const MESSAGES = {
 
     mcp_parse_error: "Parse error",
     mcp_batches_unsupported: "Batch requests are not supported by protocol version 2025-06-18",
+    mcp_not_an_object: "Invalid request: a JSON-RPC message must be an object",
+    mcp_line_too_long: (limit) => `Invalid request: message exceeds the ${limit} byte limit`,
     mcp_method_not_found: (method) => `Method not found: ${method}`,
 
     worker_spec_missing: "job-worker: spec path was not provided\n",
@@ -64,6 +66,8 @@ const MESSAGES = {
     worker_spawn_failed: (error) => `could not start Codex: ${error}`,
     worker_prompt_read_failed: (error) => `job-worker: could not read the prompt: ${error}\n`,
     worker_timeout: (seconds) => `task timed out after ${seconds}s`,
+    worker_log_truncated: (mb) =>
+      `[the journal has reached its ${mb} MiB limit; further streamed output is dropped]`,
     app_server_spawn_failed: (error) => `could not start codex app-server: ${error}`,
     app_server_signal: (signal) => `signal ${signal}`,
     app_server_code: (code) => `code ${code}`,
@@ -214,6 +218,8 @@ const MESSAGES = {
 
     mcp_parse_error: "Ошибка разбора JSON",
     mcp_batches_unsupported: "Батчи не поддерживаются в протоколе 2025-06-18",
+    mcp_not_an_object: "Неверный запрос: сообщение JSON-RPC обязано быть объектом",
+    mcp_line_too_long: (limit) => `Неверный запрос: сообщение превышает предел ${limit} байт`,
     mcp_method_not_found: (method) => `Метод не найден: ${method}`,
 
     worker_spec_missing: "job-worker: не передан путь к spec\n",
@@ -221,6 +227,8 @@ const MESSAGES = {
     worker_spawn_failed: (error) => `не удалось запустить Codex: ${error}`,
     worker_prompt_read_failed: (error) => `job-worker: промпт не прочитан: ${error}\n`,
     worker_timeout: (seconds) => `таймаут задачи: ${seconds}с`,
+    worker_log_truncated: (mb) =>
+      `[журнал достиг предела ${mb} МиБ; дальнейший потоковый вывод не пишется]`,
     app_server_spawn_failed: (error) => `не удалось запустить codex app-server: ${error}`,
     app_server_signal: (signal) => `сигнал ${signal}`,
     app_server_code: (code) => `код ${code}`,

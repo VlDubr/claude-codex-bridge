@@ -500,6 +500,12 @@ const CORE = {
     ref_not_commit: (ref) => `Reference ${ref} does not resolve to a commit in this repository.`,
     not_a_repo: "This is not a git repository — there is nothing to review.",
     clean_tree_no_base: "The working tree is clean and no default branch was found. Name the base explicitly.",
+    no_merge_base: (base) =>
+      `${base} and HEAD share no common ancestor, so there is nothing to compare against. Name a base that belongs to the same history.`,
+    diff_secrets_hidden: (files) =>
+      `[these files look like they carry credentials, so their contents are withheld — read them yourself if the review needs them]\n${files}`,
+    names_more: (n) => `… and ${n} more files`,
+    commits_more: "… earlier commits omitted",
 
     untracked_unreadable: (rel) => `${rel} — unreadable`,
     untracked_symlink: (rel, target) => `${rel} — symbolic link to ${target}`,
@@ -585,6 +591,12 @@ const CORE = {
     ref_not_commit: (ref) => `Ссылка ${ref} не разрешается в коммит этого репозитория.`,
     not_a_repo: "Это не git-репозиторий — ревьюить нечего.",
     clean_tree_no_base: "Рабочее дерево чистое, а ветку по умолчанию найти не удалось. Укажи base явно.",
+    no_merge_base: (base) =>
+      `У ${base} и HEAD нет общего предка, сравнивать не с чем. Укажи базу из той же истории.`,
+    diff_secrets_hidden: (files) =>
+      `[эти файлы похожи на хранилища учётных данных, поэтому их содержимое не показано — прочитай сам, если оно нужно для ревью]\n${files}`,
+    names_more: (n) => `… и ещё ${n} файлов`,
+    commits_more: "… более ранние коммиты опущены",
 
     untracked_unreadable: (rel) => `${rel} — нечитаем`,
     untracked_symlink: (rel, target) => `${rel} — символическая ссылка на ${target}`,

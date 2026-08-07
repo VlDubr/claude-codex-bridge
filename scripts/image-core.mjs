@@ -6,7 +6,7 @@
 // инструмента написать скрипт к платному Images API. Промпт ниже этот путь
 // закрывает жёстко.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import { codexBinary, denoise, explainCodexFailure, envClean, bypassSandboxEnabled, capabilities } from "./codex-core.mjs";
 import { extractOutput, progressTrail } from "./codex-events.mjs";
 import { prompt as imagePrompt, message } from "./i18n-image.mjs";
+import { killTree, isWindows } from "./proc.mjs";
 
 export const PROMPT_MAX = 20_000;
 export const ASPECT_RATIOS = ["1:1", "9:16", "16:9", "4:3", "3:4", "auto"];
@@ -101,6 +102,30 @@ export function sniffImage(file) {
 }
 
 /** Путь обязан остаться внутри корня: out_dir приходит от модели. */
+function realPathWithMissingTail(candidate) {
+  let current = path.resolve(candidate);
+  const tail = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync.native(current);
+      return path.resolve(real, ...tail);
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e;
+      const parent = path.dirname(current);
+      if (parent === current) throw e;
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isRealPathInside(root, candidate) {
+  const rootReal = realPathWithMissingTail(root);
+  const candidateReal = realPathWithMissingTail(candidate);
+  const relative = path.relative(rootReal, candidateReal);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
 export function resolveInside(root, candidate, what) {
   const rootAbs = path.resolve(root);
   if (path.isAbsolute(candidate)) {
@@ -110,6 +135,16 @@ export function resolveInside(root, candidate, what) {
   if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
     throw new Error(message("outside_project", what, candidate));
   }
+  try {
+    if (!isRealPathInside(rootAbs, abs)) {
+      throw new Error(message("outside_project", what, candidate));
+    }
+  } catch (e) {
+    if (e?.message === message("outside_project", what, candidate)) throw e;
+    // Ошибка разрешения реального пути — отказ по умолчанию: считать путь
+    // безопасным без проверки существующего предка нельзя.
+    throw new Error(message("outside_project", what, candidate));
+  }
   return abs;
 }
 
@@ -117,7 +152,11 @@ export function resolveInside(root, candidate, what) {
 function acceptableSource(file, cwd) {
   const abs = path.resolve(file);
   const roots = [path.resolve(cwd), path.resolve(codexGenDir())];
-  return roots.some((r) => abs === r || abs.startsWith(r + path.sep));
+  try {
+    return roots.some((r) => isRealPathInside(r, abs));
+  } catch {
+    return false;
+  }
 }
 
 // -------------------------------------------------------------------- промпт
@@ -162,6 +201,81 @@ function rescueGenerated(sinceMs) {
   return best?.path || null;
 }
 
+function runCodexAsync(command, args, { input, cwd, timeoutMs, signal }) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve({ stdout: "", stderr: "", status: null, aborted: true });
+    }
+
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: !isWindows,
+        windowsHide: true,
+      });
+    } catch (error) {
+      return resolve({ stdout: "", stderr: "", status: null, error });
+    }
+
+    const stdout = [];
+    const stderr = [];
+    let bytes = 0;
+    let spawnError = null;
+    let aborted = false;
+    let timedOut = false;
+    let overflow = false;
+    let timer = null;
+
+    const stop = () => killTree(child.pid);
+    const onAbort = () => {
+      aborted = true;
+      stop();
+    };
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+
+    const collect = (chunks) => (chunk) => {
+      if (overflow) return;
+      bytes += chunk.length;
+      if (bytes > 32 * 1024 * 1024) {
+        overflow = true;
+        stop();
+        return;
+      }
+      chunks.push(chunk);
+    };
+    child.stdout.on("data", collect(stdout));
+    child.stderr.on("data", collect(stderr));
+    child.on("error", (error) => { spawnError = error; });
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        stop();
+      }, timeoutMs);
+    }
+
+    child.on("close", (status, exitSignal) => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      const error = spawnError ||
+        (timedOut ? Object.assign(new Error("generation timeout"), { code: "ETIMEDOUT" }) : null) ||
+        (overflow ? Object.assign(new Error("output exceeded maxBuffer"), { code: "ENOBUFS" }) : null);
+      resolve({
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        status,
+        signal: exitSignal,
+        error,
+        aborted,
+      });
+    });
+  });
+}
+
 export function generateImage(opts) {
   const {
     prompt,
@@ -173,6 +287,7 @@ export function generateImage(opts) {
     name,
     cwd = process.cwd(),
     timeoutMs = (Number(envClean("CODEX_BRIDGE_IMAGE_TIMEOUT_MIN")) || 15) * 60_000,
+    signal,
   } = opts;
 
   const errors = validate({ prompt, aspect_ratio, image_resolution, images });
@@ -192,6 +307,13 @@ export function generateImage(opts) {
     return { ok: false, error: String(e.message || e) };
   }
   fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!isRealPathInside(cwd, dir)) {
+      return { ok: false, error: message("outside_project", "out_dir", out_dir || dir) };
+    }
+  } catch {
+    return { ok: false, error: message("outside_project", "out_dir", out_dir || dir) };
+  }
 
   const file = `${slug(name || prompt)}-${crypto.randomBytes(3).toString("hex")}.png`;
   const target = path.join(dir, file);
@@ -210,13 +332,20 @@ export function generateImage(opts) {
   args.push("-");
 
   const startedAt = Date.now();
-  const r = spawnSync(codexBinary(), args, {
-    input: buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs }),
-    encoding: "utf8",
-    timeout: timeoutMs,
-    maxBuffer: 32 * 1024 * 1024,
-    cwd,
-  });
+  const input = buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs });
+  const execution = signal
+    ? runCodexAsync(codexBinary(), args, { input, cwd, timeoutMs, signal })
+    : spawnSync(codexBinary(), args, {
+        input,
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 32 * 1024 * 1024,
+        cwd,
+      });
+
+  const finish = (r) => {
+  if (r.aborted)
+    return { ok: false, aborted: true, error: message("generation_cancelled") };
 
   if (r.error?.code === "ENOENT")
     return { ok: false, error: message("codex_not_found") };
@@ -294,4 +423,7 @@ export function generateImage(opts) {
     ok: false,
     error: message("generation_missing", failed, suspectScript, tailOf(out)),
   };
+  };
+
+  return execution?.then ? execution.then(finish) : finish(execution);
 }

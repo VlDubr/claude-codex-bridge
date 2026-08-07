@@ -107,7 +107,7 @@ export class AppServerClient {
     this.proc.stdin.write(`${JSON.stringify(messageValue)}\n`);
   }
 
-  request(method, params = {}, { timeoutMs = this.requestTimeoutMs } = {}) {
+  request(method, params = {}, { timeoutMs = this.requestTimeoutMs, onDispatched } = {}) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = timeoutMs > 0
@@ -129,6 +129,9 @@ export class AppServerClient {
       });
       try {
         this.send({ id, method, params });
+        // Байты ушли. Для review/start это и есть граница расхода квоты:
+        // доказать, что сервер их не обработал, уже нельзя.
+        onDispatched?.();
       } catch (error) {
         this.pending.delete(id);
         if (timer) clearTimeout(timer);
@@ -147,6 +150,15 @@ export class AppServerClient {
       incoming = JSON.parse(line);
     } catch (error) {
       this.handleExit(new AppServerError(message("app_server_bad_json"), { cause: error }));
+      killTree(this.proc?.pid);
+      return;
+    }
+
+    // `null` и скаляры разбираются без ошибки, но обращение к полям такого
+    // значения роняло бы воркер прямо в обработчике readline — без code-файла,
+    // то есть задача осталась бы висеть до реконсиляции.
+    if (incoming === null || typeof incoming !== "object" || Array.isArray(incoming)) {
+      this.handleExit(new AppServerError(message("app_server_bad_json")));
       killTree(this.proc?.pid);
       return;
     }
@@ -242,6 +254,7 @@ function acceptedError(error, accepted) {
 /** Один полный нативный review/start, включая протокольную отмену. */
 export async function runAppServerReview(options = {}) {
   let client;
+  let dispatched = false;
   let accepted = false;
   let ids = null;
   let reviewText = "";
@@ -251,9 +264,26 @@ export async function runAppServerReview(options = {}) {
     settleTurn = resolve;
   });
 
+  // Счётчики токенов app-server шлёт отдельным уведомлением, а не полем
+  // turn/completed, как exec. Без переноса лента нативного backend теряла бы
+  // строку с расходом — единственное отличие от прежнего пути.
+  let usage = null;
   const onNotification = (notification) => {
+    if (notification?.method === "thread/tokenUsage/updated") {
+      const total = notification.params?.tokenUsage?.total;
+      if (total) {
+        usage = {
+          input_tokens: total.inputTokens ?? null,
+          cached_input_tokens: total.cachedInputTokens ?? null,
+          output_tokens: total.outputTokens ?? null,
+          reasoning_output_tokens: total.reasoningOutputTokens ?? null,
+        };
+      }
+      return;
+    }
     const event = fromAppServerNotification(notification);
     if (!event) return;
+    if (event.type === "turn.completed" && usage && !event.usage) event.usage = usage;
     options.onEvent?.(event);
     const item = event.item;
     const kind = item?.type || item?.item_type;
@@ -296,7 +326,15 @@ export async function runAppServerReview(options = {}) {
         target: options.target || { type: "uncommittedChanges" },
         delivery: "inline",
       },
-      { timeoutMs: 0 }
+      {
+        timeoutMs: 0,
+        // Граница проходит по отправке, а не по ответу: если соединение умрёт
+        // между записью запроса и ответом, сервер уже мог принять ревью в
+        // работу, и exec-fallback стал бы вторым расходом квоты.
+        onDispatched: () => {
+          dispatched = true;
+        },
+      }
     );
     const beforeAcceptedAbort = new Promise((resolve) => {
       options.signal?.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true });
@@ -356,7 +394,11 @@ export async function runAppServerReview(options = {}) {
       stderr: client.stderr,
     };
   } catch (error) {
-    const wrapped = acceptedError(error, accepted);
+    // Явный JSON-RPC-отказ на review/start — доказательство, что ревью не
+    // началось: тогда exec допустим. Любой другой исход после отправки запроса
+    // неопределён, и второй reviewer запускать нельзя.
+    const rejectedByServer = Boolean(error?.rpc);
+    const wrapped = acceptedError(error, accepted || (dispatched && !rejectedByServer));
     if (client?.stderr) wrapped.stderr = client.stderr;
     throw wrapped;
   } finally {

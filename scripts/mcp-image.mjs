@@ -74,7 +74,7 @@ const TOOLS = [
 
 const root = () => envClean("CLAUDE_PROJECT_DIR") || process.cwd();
 
-async function handle(name, args) {
+async function handle(name, args, ctx = {}) {
   if (name === "image_check_params") {
     const errors = validate({
       prompt: args.prompt,
@@ -98,7 +98,7 @@ async function handle(name, args) {
     return fail(message("probe_timeout"));
 
   const cwd = root();
-  const r = generateImage({ ...args, cwd });
+  const r = await generateImage({ ...args, cwd, signal: ctx.signal });
   if (!r.ok) return fail(r.error);
 
   const rel = path.relative(cwd, r.path) || r.path;

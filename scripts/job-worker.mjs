@@ -23,8 +23,32 @@ if (!specPath) {
 }
 const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
 
+// Предел журнала. Вывод Codex ничем не ограничен сверху, а журнал читается
+// целиком при каждом обращении к задаче: без предела одна задача способна
+// занять диск и память сервера. Ответ модели приходит в конце, поэтому после
+// исчерпания предела продолжают писаться только события, а не потоковый текст.
+const LOG_MAX_BYTES = 32 * 1024 * 1024;
+
 const out = fs.createWriteStream(spec.outFile, { flags: "a", mode: FILE_MODE });
-const append = (line) => out.write(`${line}\n`);
+let logBytes = 0;
+let logTruncated = false;
+
+const append = (line) => {
+  const size = Buffer.byteLength(line, "utf8") + 1;
+  if (logBytes + size > LOG_MAX_BYTES) {
+    if (logTruncated) return;
+    logTruncated = true;
+    const note = JSON.stringify({
+      type: STDERR_LINE,
+      text: message("worker_log_truncated", Math.round(LOG_MAX_BYTES / 1024 / 1024)),
+    });
+    logBytes += Buffer.byteLength(note, "utf8") + 1;
+    out.write(`${note}\n`);
+    return;
+  }
+  logBytes += size;
+  out.write(`${line}\n`);
+};
 const stamp = () => new Date().toISOString();
 const appendEvent = (event) => append(JSON.stringify({ ...event, _ts: event._ts || stamp() }));
 const tagged = (type, text) => appendEvent({ type, text });
@@ -33,31 +57,57 @@ let finished = false;
 let child = null;
 let timer = null;
 let cancelPoll = null;
+let beat = null;
 let usingExec = false;
 let cancelled = false;
 let timedOut = false;
 let appController = null;
 let appSettled = false;
 
-/** Финал пишется атомарно: код возврата — единственный признак завершения. */
+/**
+ * Метка жизни. По одному pid отличить наш воркер от чужого процесса с тем же
+ * номером нельзя, поэтому свежесть метки и есть доказательство, что задача
+ * действительно идёт.
+ */
+function touch() {
+  if (!spec.aliveFile) return;
+  try {
+    fs.writeFileSync(spec.aliveFile, stamp(), { mode: FILE_MODE });
+  } catch {}
+}
+
+/**
+ * Финал: сначала журнал дописывается на диск, и только потом появляется код
+ * возврата. Обратный порядок означал бы, что читатель видит завершение раньше
+ * последних строк ответа и принимает обрезанный вывод за полный.
+ */
 function finish(code, note) {
   if (finished) return;
   finished = true;
   if (timer) clearTimeout(timer);
   if (cancelPoll) clearInterval(cancelPoll);
-  try {
-    if (note) {
-      fs.writeFileSync(`${spec.noteFile}.tmp`, note, { mode: FILE_MODE });
-      fs.renameSync(`${spec.noteFile}.tmp`, spec.noteFile);
+  if (beat) clearInterval(beat);
+
+  const publish = () => {
+    try {
+      if (note) {
+        fs.writeFileSync(`${spec.noteFile}.tmp`, note, { mode: FILE_MODE });
+        fs.renameSync(`${spec.noteFile}.tmp`, spec.noteFile);
+      }
+    } catch {}
+    try {
+      fs.writeFileSync(`${spec.codeFile}.tmp`, String(code), { mode: FILE_MODE });
+      fs.renameSync(`${spec.codeFile}.tmp`, spec.codeFile);
+    } catch (e) {
+      process.stderr.write(message("worker_exit_code_write_failed", e?.message || e));
     }
-  } catch {}
-  try {
-    fs.writeFileSync(`${spec.codeFile}.tmp`, String(code), { mode: FILE_MODE });
-    fs.renameSync(`${spec.codeFile}.tmp`, spec.codeFile);
-  } catch (e) {
-    process.stderr.write(message("worker_exit_code_write_failed", e?.message || e));
-  }
-  out.end(() => process.exit(0));
+    try {
+      if (spec.aliveFile) fs.rmSync(spec.aliveFile, { force: true });
+    } catch {}
+    process.exit(0);
+  };
+
+  out.end(publish);
 }
 
 function cancellationRequested() {
@@ -81,6 +131,10 @@ function requestCancellation() {
 }
 
 function installLifecycle() {
+  touch();
+  beat = setInterval(touch, Number(spec.heartbeatMs) || 5_000);
+  beat.unref?.();
+
   cancelPoll = setInterval(() => {
     if (cancellationRequested()) requestCancellation();
   }, CANCEL_POLL_MS);
@@ -109,6 +163,18 @@ function runExec() {
     return;
   }
   usingExec = true;
+
+  // Промпт читается до запуска: иначе Codex уже работает, а подать ему на вход
+  // нечего, и он молча ждёт закрытия stdin до самого таймаута задачи.
+  let promptData;
+  try {
+    promptData = fs.readFileSync(spec.promptFile);
+  } catch (e) {
+    appendEvent({ type: "turn.failed", error: { message: message("worker_prompt_read_failed", e?.message || e) } });
+    finish(1, "prompt_failed");
+    return;
+  }
+
   child = spawn(spec.bin, spec.args, {
     cwd: spec.cwd || process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
@@ -123,25 +189,21 @@ function runExec() {
 
   // Промпт уходит через stdin: аргументы командной строки ограничены по длине,
   // а диф ревью легко превышает лимит.
-  try {
-    const prompt = fs.readFileSync(spec.promptFile);
-    child.stdin.write(prompt);
-    child.stdin.end();
-  } catch (e) {
-    process.stderr.write(message("worker_prompt_read_failed", e?.message || e));
-  }
   child.stdin.on("error", () => {});
+  child.stdin.write(promptData);
+  child.stdin.end();
 
   readline.createInterface({ input: child.stdout }).on("line", (line) => {
     const t = line.trim();
-    if (!t) return;
     if (t.startsWith("{")) {
       try {
         const event = JSON.parse(t);
         if (event && typeof event === "object") return appendEvent(event);
       } catch {}
     }
-    tagged(STDOUT_LINE, t);
+    // Строка сохраняется как есть: у старого Codex без --json это сам ответ, и
+    // обрезка отступов ломала в нём блоки кода, списки и разметку.
+    tagged(STDOUT_LINE, line.replace(/\r$/, ""));
   });
 
   readline.createInterface({ input: child.stderr }).on("line", (line) => {
@@ -149,7 +211,10 @@ function runExec() {
     if (t) tagged(STDERR_LINE, t);
   });
 
-  child.on("exit", (code, signal) => {
+  // close, а не exit: exit приходит по завершению процесса, когда stdout и
+  // stderr ещё могут содержать непрочитанные строки. Завершив задачу по нему,
+  // воркер терял бы хвост ответа — ровно ту часть, где ответ обычно и лежит.
+  child.on("close", (code, signal) => {
     finish(code === null ? (signal ? 143 : 1) : code, signal ? `signal:${signal}` : null);
   });
 }
@@ -183,6 +248,9 @@ async function runNativeReview() {
       },
       async (error) => {
         if (cancelled || timedOut || appController.signal.aborted) return { cancelled: true, fallback: false };
+        // Промпта нет — подменять нечем: диф собрать не удалось, а нативному
+        // ревью он и не требовался. Отказ доносим как есть.
+        if (spec.allowFallback === false) throw error;
         appendStderr(error?.stderr);
         tagged(STDERR_LINE, message("app_server_fallback", error?.message || error));
         return { fallback: true };

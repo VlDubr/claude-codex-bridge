@@ -2067,6 +2067,474 @@ await t("31k. отмена ожидающего review/start не запуска
   assert.equal(fallbacks, 0);
 });
 
+// ───────────────────────────────── 34. Исправления повторного code review
+
+function runClaudeTaskCase(dir, config) {
+  return new Promise((resolve, reject) => {
+    const exposed = path.join(dir, "exposed.json");
+    const argvFile = path.join(dir, "claude-argv.json");
+    fs.writeFileSync(exposed, JSON.stringify(config));
+    const claude = path.join(dir, "claude");
+    fs.writeFileSync(
+      claude,
+      `#!/usr/bin/env node
+require("fs").writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));
+console.log("ok");`,
+      { mode: 0o755 }
+    );
+
+    const child = spawn(process.execPath, [path.join(ROOT, "bridge", "mcp-claude.mjs")], {
+      env: { ...process.env, CLAUDE_BIN: claude, CODEX_BRIDGE_EXPOSED: exposed },
+    });
+    const messages = [];
+    const stderr = [];
+    readline.createInterface({ input: child.stdout }).on("line", (line) => {
+      if (!line.trim()) return;
+      try { messages.push(JSON.parse(line)); } catch {}
+    });
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`обратный мост не завершился после EOF: ${Buffer.concat(stderr).toString("utf8")}`));
+    }, 5_000);
+    child.on("close", () => {
+      clearTimeout(timer);
+      resolve({ messages, argvFile });
+    });
+    child.stdin.end(
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "claude_task", arguments: { task: "x", write: true } } },
+      ].map(JSON.stringify).join("\n") + "\n"
+    );
+  });
+}
+
+await tExec("34a. write-задача без административного task_tools отклоняется", async () => {
+  const d = fresh("write-tools-missing");
+  const { messages, argvFile } = await runClaudeTaskCase(d, { servers: {}, allow_task: true });
+  assert.equal(messages.find((m) => m.id === 2)?.result?.isError, true);
+  assert.ok(!fs.existsSync(argvFile), "Claude запущен без административного allowlist");
+});
+
+await tExec("34b. пустой административный task_tools означает deny-all", async () => {
+  const d = fresh("write-tools-empty");
+  const { messages, argvFile } = await runClaudeTaskCase(d, { servers: {}, allow_task: true, task_tools: [] });
+  assert.equal(messages.find((m) => m.id === 2)?.result?.isError, true);
+  assert.ok(!fs.existsSync(argvFile), "пустой allowlist раскрыл все инструменты Claude");
+});
+
+await tExec("34c. непустой task_tools ограничивает write-задачу через --tools", async () => {
+  const d = fresh("write-tools-nonempty");
+  const { messages, argvFile } = await runClaudeTaskCase(d, { servers: {}, allow_task: true, task_tools: ["Read"] });
+  assert.equal(messages.find((m) => m.id === 2)?.result?.isError, undefined);
+  const argv = JSON.parse(fs.readFileSync(argvFile, "utf8"));
+  assert.equal(argv[argv.indexOf("--tools") + 1], "Read");
+});
+
+await t("34d. resolveInside отвергает выход через symlink или junction", async () => {
+  const root = fresh("image-realpath-root");
+  const outside = fresh("image-realpath-outside");
+  const link = path.join(root, "escape");
+  fs.symlinkSync(outside, link, WIN ? "junction" : "dir");
+  const img = await import(`${ROOT_URL}/scripts/image-core.mjs?realpath=${Date.now()}`);
+  assert.throws(
+    () => img.resolveInside(root, path.join("escape", "new.png"), "out_dir"),
+    /outside|предел|project|проекта/i
+  );
+});
+
+await t("34e. setup сообщает конфликт link-back и выходит с ненулевым кодом", async () => {
+  const d = fresh("setup-link-conflict");
+  const config = path.join(d, "config.toml");
+  const original = '[mcp_servers.claude-bridge]\ncommand = "custom"\n';
+  fs.writeFileSync(config, original, { mode: 0o600 });
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "setup.mjs"), "--link-back"], {
+    cwd: d,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CODEX_BRIDGE_LANG: "en",
+      CODEX_BRIDGE_CONFIG: config,
+      CODEX_BRIDGE_EXPOSED: path.join(d, "exposed.json"),
+      CLAUDE_PLUGIN_DATA: path.join(d, "data"),
+      CODEX_BIN: process.execPath,
+      CLAUDE_BIN: process.execPath,
+    },
+  });
+  assert.notEqual(r.status, 0, "конфликт был выдан за успешное обновление");
+  assert.match(`${r.stdout}\n${r.stderr}`, /already contains|conflict/i);
+  assert.ok(!`${r.stdout}\n${r.stderr}`.includes("undefined"));
+  assert.equal(fs.readFileSync(config, "utf8"), original);
+});
+
+await t("34f. quoted TOML-таблица claude-bridge тоже считается конфликтом", async () => {
+  const d = fresh("toml-quoted-conflict");
+  const config = path.join(d, "config.toml");
+  const original = '[mcp_servers."claude-bridge"]\ncommand = "custom"\n';
+  fs.writeFileSync(config, original);
+  process.env.CODEX_BRIDGE_CONFIG = config;
+  const root = path.join(d, "plugin");
+  fs.mkdirSync(path.join(root, "bridge"), { recursive: true });
+  fs.writeFileSync(path.join(root, "bridge", "mcp-claude.mjs"), "");
+  const lb = await import(`${ROOT_URL}/scripts/link-back.mjs?quoted=${Date.now()}`);
+  assert.equal(lb.link(root).action, "conflict");
+  assert.equal(fs.readFileSync(config, "utf8"), original);
+});
+
+await tExec("34g. атомарная перезапись config.toml сохраняет режим 0600", async () => {
+  const d = fresh("toml-mode");
+  const config = path.join(d, "config.toml");
+  fs.writeFileSync(config, 'model = "x"\n', { mode: 0o600 });
+  fs.chmodSync(config, 0o600);
+  process.env.CODEX_BRIDGE_CONFIG = config;
+  const root = path.join(d, "plugin");
+  fs.mkdirSync(path.join(root, "bridge"), { recursive: true });
+  fs.writeFileSync(path.join(root, "bridge", "mcp-claude.mjs"), "");
+  const lb = await import(`${ROOT_URL}/scripts/link-back.mjs?mode=${Date.now()}`);
+  assert.equal(lb.link(root).action, "added");
+  assert.equal(fs.statSync(config).mode & 0o777, 0o600);
+});
+
+await t("34h. EOF останавливает MCP-proxy после завершения текущих вызовов", async () => {
+  const d = fresh("reverse-proxy-eof");
+  const nested = path.join(d, "nested.mjs");
+  fs.writeFileSync(
+    nested,
+    `import readline from "node:readline";
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.method === "initialize") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "nested", version: "1" } } }) + "\\n");
+  if (m.method === "tools/list") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: [] } }) + "\\n");
+});`
+  );
+  const exposed = path.join(d, "exposed.json");
+  fs.writeFileSync(exposed, JSON.stringify({
+    servers: { nested: { command: process.execPath, args: [nested], tools: ["*"] } },
+    allow_task: false,
+  }));
+
+  const started = Date.now();
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(ROOT, "bridge", "mcp-claude.mjs")], {
+      env: { ...process.env, CODEX_BRIDGE_EXPOSED: exposed },
+    });
+    const stderr = [];
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`мост завис после EOF: ${Buffer.concat(stderr).toString("utf8")}`));
+    }, 5_000);
+    child.on("close", () => { clearTimeout(timer); resolve(); });
+    child.stdin.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n");
+  });
+  assert.ok(Date.now() - started < 4_000, "proxy удерживал event loop после EOF");
+});
+
+await tExec("34i. генерация изображения асинхронна и отменяет дерево Codex", async () => {
+  const d = fresh("image-cancel-async");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE = "slow";
+  const img = await import(`${ROOT_URL}/scripts/image-core.mjs?cancel=${Date.now()}`);
+  const controller = new AbortController();
+  let eventLoopTicked = false;
+  setTimeout(() => { eventLoopTicked = true; controller.abort(); }, 100);
+  const started = Date.now();
+  const pending = img.generateImage({ prompt: "x", cwd: d, signal: controller.signal, timeoutMs: 5_000 });
+  assert.equal(typeof pending?.then, "function", "MCP-путь остался синхронным");
+  const result = await pending;
+  assert.equal(result.aborted, true);
+  assert.equal(eventLoopTicked, true, "event loop был заблокирован генерацией");
+  assert.ok(Date.now() - started < 3_000, "отмена не остановила процесс вовремя");
+  delete process.env.FAKE;
+});
+
+await t("34j. параллельные процессы не теряют записи prefs.json", async () => {
+  const d = fresh("prefs-concurrent");
+  const writer = path.join(d, "writer.mjs");
+  const ready = path.join(d, "ready.txt");
+  const go = path.join(d, "go");
+  fs.writeFileSync(
+    writer,
+    `import fs from "node:fs";
+import { writePrefs } from ${JSON.stringify(`${ROOT_URL}/scripts/prefs.mjs`)};
+fs.appendFileSync(process.env.READY, "1\\n");
+const cell = new Int32Array(new SharedArrayBuffer(4));
+while (!fs.existsSync(process.env.GO)) Atomics.wait(cell, 0, 0, 5);
+writePrefs(process.argv[2], { model: process.argv[3] });`
+  );
+  const count = 8;
+  const children = Array.from({ length: count }, (_, i) =>
+    spawn(process.execPath, [writer, `/repo/${i}`, `model-${i}`], {
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_DATA: path.join(d, "jobs"),
+        READY: ready,
+        GO: go,
+      },
+    })
+  );
+  const deadline = Date.now() + 5_000;
+  while ((!fs.existsSync(ready) || fs.readFileSync(ready, "utf8").trim().split("\n").length < count) && Date.now() < deadline) {
+    await sleep(20);
+  }
+  fs.writeFileSync(go, "go");
+  await Promise.all(children.map((child) => new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`writer exited ${code}`)));
+  })));
+  const all = JSON.parse(fs.readFileSync(path.join(d, "jobs", "prefs.json"), "utf8"));
+  assert.equal(Object.keys(all).length, count);
+  for (let i = 0; i < count; i++) assert.equal(all[`/repo/${i}`]?.model, `model-${i}`);
+});
+
+await t("32a. скалярное JSON-сообщение не роняет MCP-сервер", async () => {
+  const d = fresh("mcp-scalar");
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "mcp-codex.mjs")], {
+    input: 'null\n"строка"\n{"jsonrpc":"2.0","id":7,"method":"ping"}\n',
+    encoding: "utf8",
+    timeout: 20_000,
+    env: { ...process.env, CODEX_BRIDGE_LANG: "en", CLAUDE_PLUGIN_DATA: path.join(d, "data") },
+  });
+  const out = `${r.stdout}`;
+  assert.ok(!/TypeError|Cannot destructure/.test(`${r.stdout}${r.stderr}`), "сервер упал на скаляре");
+  assert.match(out, /"code":-32600/, "нет отказа -32600 на скалярное сообщение");
+  assert.match(out, /"id":7[,}]/, "сервер не дожил до следующего запроса");
+});
+
+await t("32b. слишком длинная строка отвергается до разбора", async () => {
+  const d = fresh("mcp-huge");
+  const huge = `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"${"a".repeat(17 * 1024 * 1024)}"}}`;
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "mcp-codex.mjs")], {
+    input: `${huge}\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n`,
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, CODEX_BRIDGE_LANG: "en", CLAUDE_PLUGIN_DATA: path.join(d, "data") },
+  });
+  assert.match(`${r.stdout}`, /"code":-32600/, "предел размера сообщения не сработал");
+  assert.match(`${r.stdout}`, /"id":2[,}]/, "сервер не пережил слишком длинное сообщение");
+});
+
+await t("32c. код возврата появляется только после дописанного журнала", async () => {
+  const d = fresh("worker-flush");
+  const talker = path.join(d, "talker.mjs");
+  // Много строк подряд и мгновенный выход: событие exit придёт раньше, чем
+  // читатель успеет разобрать stdout, если воркер ждёт не того события.
+  const lines = 4000;
+  fs.writeFileSync(
+    talker,
+    `let s = "";
+for (let i = 0; i < ${lines}; i++) s += JSON.stringify({ type: "item.completed", item: { type: "agentMessage", text: "строка " + i } }) + "\\n";
+process.stdout.write(s);
+process.exit(0);
+`
+  );
+  const spec = {
+    bin: process.execPath,
+    args: [talker],
+    promptFile: path.join(d, "prompt"),
+    outFile: path.join(d, "out"),
+    codeFile: path.join(d, "code"),
+    noteFile: path.join(d, "note"),
+    cancelFile: path.join(d, "cancel"),
+    aliveFile: path.join(d, "alive"),
+    heartbeatMs: 1000,
+    cwd: d,
+    backend: "exec",
+    timeoutMs: 60_000,
+  };
+  fs.writeFileSync(spec.promptFile, "hi");
+  const specFile = path.join(d, "spec.json");
+  fs.writeFileSync(specFile, JSON.stringify(spec));
+
+  const child = spawn(process.execPath, [path.join(ROOT, "scripts", "job-worker.mjs"), specFile], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  // Читатель ведёт себя как followJob: увидев код возврата, дочитывает журнал.
+  let seen = 0;
+  for (let i = 0; i < 600; i++) {
+    if (fs.existsSync(spec.codeFile)) {
+      seen = fs.readFileSync(spec.outFile, "utf8").split("\n").filter((l) => l.trim()).length;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  child.kill();
+  assert.equal(seen, lines, `журнал оборван: ${seen} строк вместо ${lines}`);
+});
+
+await t("32d. отменённая задача остаётся в учёте, пока жив её воркер", async () => {
+  const d = fresh("cancel-limit");
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?cl=${Date.now()}`);
+  const dir = core.dataDir();
+  const id = "job-cccc1111";
+  const victim = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  fs.writeFileSync(
+    path.join(dir, `${id}.json`),
+    JSON.stringify({
+      id,
+      pid: victim.pid,
+      mode: "delegate",
+      status: "running",
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      repo: d,
+      cwd: d,
+    })
+  );
+  fs.writeFileSync(path.join(dir, `${id}.alive`), new Date().toISOString());
+  assert.equal(core.liveJobs().length, 1, "живая задача не учтена");
+  core.cancelJob(id);
+  fs.writeFileSync(path.join(dir, `${id}.alive`), new Date().toISOString());
+  assert.equal(core.liveJobs().length, 1, "отмена сняла задачу с учёта, пока процесс ещё жив");
+  victim.kill();
+});
+
+await t("32e. задача с чужим pid и протухшей меткой не считается живой", async () => {
+  const d = fresh("stale-heartbeat");
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?sh=${Date.now()}`);
+  const dir = core.dataDir();
+  const id = "job-dddd2222";
+  const victim = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  fs.writeFileSync(
+    path.join(dir, `${id}.json`),
+    JSON.stringify({
+      id,
+      pid: victim.pid, // номер занят посторонним процессом
+      mode: "delegate",
+      status: "running",
+      startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      repo: d,
+      cwd: d,
+    })
+  );
+  const old = new Date(Date.now() - 5 * 60_000);
+  fs.writeFileSync(path.join(dir, `${id}.alive`), "old");
+  fs.utimesSync(path.join(dir, `${id}.alive`), old, old);
+
+  assert.equal(core.liveJobs().length, 0, "чужой процесс принят за живой воркер");
+  assert.equal(core.resolveJob(id, d).status, "unknown");
+  assert.ok(!victim.killed, "посторонний процесс был убит страховкой");
+  victim.kill();
+});
+
+await t("32f. таймаут задачи из настройки проверяется", async () => {
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?jt=${Date.now()}`);
+  const prev = process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN;
+  for (const [value, expected] of [
+    ["-5", 30],
+    ["мусор", 30],
+    ["0", 30],
+    ["10000", 480],
+    ["45", 45],
+  ]) {
+    process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN = value;
+    assert.equal(core.jobTimeoutMs(), expected * 60_000, `значение ${value} принято как есть`);
+  }
+  if (prev === undefined) delete process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN;
+  else process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN = prev;
+});
+
+await t("32g. содержимое отслеживаемого файла с секретами не уходит в диф", async () => {
+  const d = fresh("diff-secrets");
+  const git = (...a) => spawnSync("git", a, { cwd: d, encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "t");
+  fs.writeFileSync(path.join(d, ".env"), "OPENAI_API_KEY=sk-should-never-be-shown\n");
+  fs.writeFileSync(path.join(d, "app.js"), "const a = 1;\n");
+  git("add", "-A");
+  git("commit", "-qm", "init");
+  fs.writeFileSync(path.join(d, ".env"), "OPENAI_API_KEY=sk-still-secret-after-change\n");
+  fs.writeFileSync(path.join(d, "app.js"), "const a = 2;\n");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?ds=${Date.now()}`);
+  const diff = core.collectDiff(d, null);
+  assert.ok(!/sk-still-secret-after-change/.test(diff), "содержимое .env попало в диф");
+  assert.match(diff, /\.env/, "сам факт изменения .env скрыт от ревью");
+  assert.match(diff, /const a = 2;/, "обычные изменения потерялись вместе с секретом");
+});
+
+await t("32h. отсутствие общего предка — явный отказ, а не другое сравнение", async () => {
+  const d = fresh("no-merge-base");
+  const git = (...a) => spawnSync("git", a, { cwd: d, encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "t");
+  fs.writeFileSync(path.join(d, "a.txt"), "a\n");
+  git("add", "-A");
+  git("commit", "-qm", "first");
+  git("checkout", "-q", "--orphan", "other");
+  fs.writeFileSync(path.join(d, "b.txt"), "b\n");
+  git("add", "-A");
+  git("commit", "-qm", "unrelated");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?nmb=${Date.now()}`);
+  const first = git("rev-parse", "master").stdout.trim() || git("rev-parse", "main").stdout.trim();
+  assert.throws(() => core.collectDiff(d, first), /общего предка|common ancestor/i);
+});
+
+await t("32i. потоковые дельты и счётчики токенов не попадают в журнал", async () => {
+  const ev = await import(`${ROOT_URL}/scripts/codex-events.mjs?dl=${Date.now()}`);
+  assert.equal(
+    ev.fromAppServerNotification({ method: "item/agentMessage/delta", params: { delta: "чат" } }),
+    null,
+    "дельта ответа пишется в журнал"
+  );
+  assert.equal(
+    ev.fromAppServerNotification({ method: "thread/tokenUsage/updated", params: {} }),
+    null,
+    "обновление счётчиков пишется в журнал"
+  );
+  assert.equal(
+    ev.fromAppServerNotification({ method: "item/completed", params: { item: { type: "agentMessage", text: "да" } } })
+      ?.type,
+    "item.completed",
+    "полезное событие потерялось вместе с шумом"
+  );
+});
+
+await t("32j. многобайтные символы переживают границу чтения журнала", async () => {
+  const d = fresh("decoder");
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?dec=${Date.now()}`);
+  const dir = core.dataDir();
+  const id = "job-eeee3333";
+  const line = JSON.stringify({ type: "item.completed", item: { type: "agentMessage", text: "проверка кириллицы" } });
+  const buf = Buffer.from(`${line}\n`, "utf8");
+  const file = path.join(dir, `${id}.out`);
+  fs.writeFileSync(file, buf.subarray(0, buf.length - 12)); // обрыв внутри символа
+
+  const events = [];
+  const follow = core.followJob(id, { timeoutMs: 3_000, pollMs: 20, onEvent: (e) => events.push(e) });
+  await new Promise((r) => setTimeout(r, 200));
+  fs.appendFileSync(file, buf.subarray(buf.length - 12));
+  fs.writeFileSync(path.join(dir, `${id}.code`), "0");
+  await follow;
+
+  assert.equal(events.length, 1, "событие не собралось из двух чтений");
+  assert.equal(events[0].item.text, "проверка кириллицы", "кириллица испорчена на границе чтения");
+});
+
+await t("32k. без промпта нативное ревью не подменяется exec", async () => {
+  const d = fresh("no-fallback");
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?nf=${Date.now()}`);
+  let fallbacks = 0;
+  await assert.rejects(
+    app.runAppServerReviewWithFallback(
+      { cwd: d, command: fakeAppServer(d, "exit"), target: { type: "uncommittedChanges" }, requestTimeoutMs: 5_000 },
+      async (error) => {
+        fallbacks++;
+        throw error;
+      }
+    )
+  );
+  assert.equal(fallbacks, 0, "после отправки review/start запущен второй расход квоты");
+});
+
 // ───────────────────────────────── отчёт
 
 const failed = results.filter((r) => !r.ok);

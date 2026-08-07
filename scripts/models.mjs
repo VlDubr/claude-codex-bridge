@@ -94,7 +94,14 @@ export function fetchModels({ force = false } = {}) {
     const start = raw.search(/[[{]/);
     if (start >= 0) {
       const tail = raw.slice(start);
-      for (let end = tail.length; end > 1; end = tail.lastIndexOf("}", end - 1) + 1 || tail.lastIndexOf("]", end - 1) + 1) {
+      // Каталог бывает массивом, а не объектом, поэтому границы ищутся по обеим
+      // закрывающим скобкам сразу: прежний перебор предпочитал последнюю «}» и
+      // пропускал более позднюю «]», то есть массив объектов не разбирался.
+      const ends = [];
+      for (let i = tail.length; i > 1; i--) {
+        if (tail[i - 1] === "}" || tail[i - 1] === "]") ends.push(i);
+      }
+      for (const end of ends) {
         try {
           const models = parseCatalog(JSON.parse(tail.slice(0, end)));
           if (models.length) {
@@ -102,7 +109,6 @@ export function fetchModels({ force = false } = {}) {
             return { ok: true, models, source: "codex debug models", complete: true };
           }
         } catch {}
-        if (end <= 1) break;
       }
     }
   }

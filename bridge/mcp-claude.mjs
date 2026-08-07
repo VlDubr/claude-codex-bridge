@@ -41,7 +41,6 @@ const running = new Set();
 
 function stopAll() {
   for (const child of running) killTree(child.pid);
-  running.clear();
 }
 
 /**
@@ -81,8 +80,7 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
 
     const outChunks = [];
     const errChunks = [];
-    let outBytes = 0;
-    let errBytes = 0;
+    let outputBytes = 0;
     let settled = false;
     let timer = null;
 
@@ -95,7 +93,10 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
       if (timer) clearTimeout(timer);
       timer = null;
       signal?.removeEventListener?.("abort", onAbort);
-      running.delete(child);
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.stdout?.resume();
+      child.stderr?.resume();
       resolve(result);
     };
 
@@ -105,27 +106,34 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
     }
     signal?.addEventListener?.("abort", onAbort, { once: true });
 
-    const overflow = (stream) => {
+    const overflow = () => {
       killTree(child.pid);
       settle({
         ok: false,
-        error: message("output_overflow", stream, Math.round(MAX_OUTPUT_BYTES / 1024 / 1024)),
+        error: message("combined_output_overflow", Math.round(MAX_OUTPUT_BYTES / 1024 / 1024)),
       });
     };
 
-    child.stdout.on("data", (b) => {
-      outBytes += b.length;
-      if (outBytes > MAX_OUTPUT_BYTES) return overflow("stdout");
+    function onStdout(b) {
+      if (settled) return;
+      outputBytes += b.length;
+      if (outputBytes > MAX_OUTPUT_BYTES) return overflow();
       outChunks.push(b);
-    });
-    child.stderr.on("data", (b) => {
-      errBytes += b.length;
-      if (errBytes > MAX_OUTPUT_BYTES) return overflow("stderr");
+    }
+    function onStderr(b) {
+      if (settled) return;
+      outputBytes += b.length;
+      if (outputBytes > MAX_OUTPUT_BYTES) return overflow();
       errChunks.push(b);
-    });
+    }
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+
+    // В running процесс остаётся до фактического закрытия, даже если вызов уже
+    // завершён таймаутом или отменой, а SIGTERM ещё не успел подействовать.
+    child.once("close", () => running.delete(child));
 
     child.on("error", (e) => {
-      running.delete(child);
       settle(
         e?.code === "ENOENT"
           ? { ok: false, error: message("claude_not_found") }
@@ -172,11 +180,21 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
  * иначе настройка task_tools: ["Read"] обходится одним аргументом.
  */
 function resolveTools(requested, configured, write) {
-  const admin = Array.isArray(configured) && configured.length ? [...configured] : null;
-  const asked = Array.isArray(requested) && requested.length ? [...requested] : null;
+  const admin = Array.isArray(configured)
+    ? configured.filter((tool) => typeof tool === "string" && tool.trim()).map((tool) => tool.trim())
+    : null;
+  const asked = Array.isArray(requested)
+    ? requested.filter((tool) => typeof tool === "string" && tool.trim()).map((tool) => tool.trim())
+    : null;
 
-  let tools = admin;
-  if (asked) {
+  // Режим acceptEdits безопасен только при явном административном потолке.
+  // Отсутствующий и пустой task_tools — deny-all, а не разрешение всех tools.
+  if (write && !admin?.length) {
+    return { error: message("task_write_allowlist_required") };
+  }
+
+  let tools = admin?.length ? admin : null;
+  if (asked?.length) {
     tools = admin ? admin.filter((t) => asked.includes(t)) : [...asked];
     if (admin && !tools.length) {
       // Пустое пересечение — не повод молча запустить Claude без инструментов:
@@ -271,7 +289,7 @@ if (proxy.errors.length) {
 
 // ------------------------------------------------------------------ обработка
 
-async function handle(name, args, ctx = {}) {
+async function dispatch(name, args, ctx = {}) {
   if (proxy.has(name)) {
     try {
       const res = await proxy.call(name, args);
@@ -318,6 +336,20 @@ async function handle(name, args, ctx = {}) {
   return fail(message("unknown_tool", name));
 }
 
+let accepting = true;
+const activeCalls = new Set();
+
+async function handle(name, args, ctx = {}) {
+  if (!accepting) return fail(message("bridge_closing"));
+  const call = dispatch(name, args, ctx);
+  activeCalls.add(call);
+  try {
+    return await call;
+  } finally {
+    activeCalls.delete(call);
+  }
+}
+
 // Мост уходит — Claude уходит с ним. Иначе закрытие Codex оставляет позади
 // процессы, которые продолжают править файлы в репозитории без надзора.
 // Закрытие stdin намеренно НЕ убивает Claude: клиент закрывает поток сразу
@@ -335,5 +367,14 @@ for (const sig of ["SIGTERM", "SIGINT"]) {
     process.exit(130);
   });
 }
+
+process.stdin.once("end", async () => {
+  accepting = false;
+  // EOF означает, что новых запросов уже не будет, но текущий заказ клиента
+  // обязан завершиться. Только после него можно остановить дочерние MCP-серверы.
+  await Promise.allSettled([...activeCalls]);
+  proxy.stop();
+  process.exit(0);
+});
 
 serve({ name: "claude-bridge", version: pluginVersion(), tools: TOOLS, handle });

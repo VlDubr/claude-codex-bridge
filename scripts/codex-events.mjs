@@ -41,6 +41,10 @@ export function fromAppServerNotification(notification) {
   const type = notification.method.replaceAll("/", ".");
   const params = notification.params && typeof notification.params === "object" ? notification.params : {};
   if (!/^(thread|turn|item)\.|^error$/.test(type)) return null;
+  // Потоковые дельты ответа и обновления счётчиков идут десятками на один
+  // ответ. В журнале от них нет ни одного нового шага работы, зато он растёт
+  // на порядок, а читается целиком при каждом обращении к задаче.
+  if (/\.delta$/.test(type) || /^thread\.(tokenUsage|status)\./.test(type)) return null;
   if (type === "turn.completed" && params.turn?.status === "failed") {
     return { ...params, type: "turn.failed", error: params.turn.error || params.error || null };
   }

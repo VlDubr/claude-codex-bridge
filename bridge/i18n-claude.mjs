@@ -102,6 +102,8 @@ const MESSAGES = {
     cancelled: "The call was cancelled and Claude was stopped.",
     output_overflow: (stream, mb) =>
       `Claude wrote more than ${mb} MB to ${stream}; the output was rejected and the process was stopped.`,
+    combined_output_overflow: (mb) =>
+      `Claude wrote more than ${mb} MB across stdout and stderr; the output was rejected and the process was stopped.`,
     claude_not_found: "The Claude executable was not found in PATH.",
     timeout: "Claude did not respond within the allotted time.",
     exit: (code, signal) =>
@@ -111,12 +113,15 @@ const MESSAGES = {
     tools_not_allowed: (asked, admin) =>
       `The requested tools [${asked.join(", ")}] are not in the allowed set [${admin.join(", ")}]. ` +
       "The administrator configures this set with /codex-bridge:setup --task-tools, and callers cannot expand it.",
+    task_write_allowlist_required:
+      "Write-enabled claude_task requires a non-empty administrative tool allowlist. Configure it with /codex-bridge:setup --allow-task --task-tools Read,Edit.",
     no_tools_after_write_filter: (writeTools, before) =>
       `After removing write-capable tools (${writeTools.join(", ")}), none of the requested tools ` +
       `[${(before || []).join(", ")}] remain available. Pass write: true if the task must change files.`,
     proxy_errors: (errors) => `[codex-bridge] tool proxy errors:\n  ${errors.join("\n  ")}\n`,
     proxied_tool_failed: (name, error) => `Proxied tool ${name} failed: ${error}`,
     task_disabled: "claude_task is disabled. Enable it with: /codex-bridge:setup --allow-task",
+    bridge_closing: "The Claude bridge is closing and no longer accepts new calls.",
     unknown_tool: (name) => `Unknown tool: ${name}`,
     answer: (output) => `Claude's answer:\n\n${output}`,
     report: (output) => `Claude's report:\n\n${output}`,
@@ -127,6 +132,8 @@ const MESSAGES = {
     cancelled: "Вызов отменён, Claude остановлен.",
     output_overflow: (stream, mb) =>
       `Claude напечатал в ${stream} больше ${mb} МБ — вывод не принят, процесс остановлен.`,
+    combined_output_overflow: (mb) =>
+      `Суммарный вывод Claude в stdout и stderr превысил ${mb} МБ — вывод не принят, процесс остановлен.`,
     claude_not_found: "Бинарь claude не найден в PATH.",
     timeout: "Claude не ответил за отведённое время.",
     exit: (code, signal) => `Claude завершился с кодом ${code === null ? `сигналом ${signal}` : code}.`,
@@ -135,12 +142,15 @@ const MESSAGES = {
     tools_not_allowed: (asked, admin) =>
       `Запрошенные инструменты [${asked.join(", ")}] не входят в разрешённый набор ` +
       `[${admin.join(", ")}]. Набор задаётся администратором через /codex-bridge:setup --task-tools и расширению не подлежит.`,
+    task_write_allowlist_required:
+      "Для claude_task с правом записи нужен непустой административный allowlist. Настрой его: /codex-bridge:setup --allow-task --task-tools Read,Edit.",
     no_tools_after_write_filter: (writeTools, before) =>
       `После исключения инструментов записи (${writeTools.join(", ")}) не осталось ни одного ` +
       `доступного инструмента из [${(before || []).join(", ")}]. Передай write: true, если нужна правка файлов.`,
     proxy_errors: (errors) => `[codex-bridge] проброс инструментов:\n  ${errors.join("\n  ")}\n`,
     proxied_tool_failed: (name, error) => `Проброшенный инструмент ${name} завершился ошибкой: ${error}`,
     task_disabled: "claude_task выключен. Включить: /codex-bridge:setup --allow-task",
+    bridge_closing: "Мост Claude завершает работу и больше не принимает новые вызовы.",
     unknown_tool: (name) => `Неизвестный инструмент: ${name}`,
     answer: (output) => `Ответ Claude:\n\n${output}`,
     report: (output) => `Claude отчитался:\n\n${output}`,

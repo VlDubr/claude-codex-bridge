@@ -481,11 +481,18 @@ async function dispatchTool(name, args, ctx = {}) {
       // ревью «ни о чём», поэтому отказ доносим как есть, а не как сбой сервера.
       // Промпт строится здесь же и передаётся готовым: иначе git-диф собирался
       // бы дважды — на проверке и на запуске.
-      let prompt;
+      let prompt = null;
+      let diffError = null;
       try {
         prompt = buildPrompt({ mode, cwd, ...args });
       } catch (e) {
-        return err(U().diff_failed(e?.message || e));
+        diffError = e;
+      }
+      // Нативный reviewer получает структурную цель и диф не читает. Отказ
+      // сбора отнимает у него только запасной путь через exec, поэтому
+      // блокировать им весь вызов значило бы отказывать работоспособному ревью.
+      if (diffError && backend !== "app-server") {
+        return err(U().diff_failed(diffError?.message || diffError));
       }
       const spec = {
         mode,
@@ -493,6 +500,7 @@ async function dispatchTool(name, args, ctx = {}) {
         ...args,
         ...applyDefaults(args, cwd),
         prompt,
+        allowFallback: !diffError,
         backend,
         reviewTarget: backend === "app-server" ? appServerReviewTarget(args) : null,
       };

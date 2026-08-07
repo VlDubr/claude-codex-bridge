@@ -72,14 +72,24 @@ function stripBlocks(text) {
 /** Есть ли объявление нашей таблицы ВНЕ управляемого блока. */
 function foreignTable(text) {
   const outside = stripBlocks(text);
-  return new RegExp(`^\\s*\\[${esc(SERVER_TABLE)}\\]`, "m").test(outside);
+  return /^\s*\[\s*mcp_servers\s*\.\s*(?:claude-bridge|"claude-bridge")\s*\]/m.test(outside);
 }
 
 function writeAtomic(content) {
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
   const tmp = `${CONFIG_PATH}.codex-bridge.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, content);
-  fs.renameSync(tmp, CONFIG_PATH);
+  let mode = 0o600;
+  try {
+    mode = fs.statSync(CONFIG_PATH).mode & 0o777;
+  } catch {}
+  try {
+    fs.writeFileSync(tmp, content, { mode });
+    // writeFile's mode не применяется, если временный файл уже существовал.
+    fs.chmodSync(tmp, mode);
+    fs.renameSync(tmp, CONFIG_PATH);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
 }
 
 export function isLinked() {

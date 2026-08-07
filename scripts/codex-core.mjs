@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import {
   extractOutput,
   progressTrail,
@@ -241,7 +242,11 @@ export function capabilities({ force = false } = {}) {
   if (capsCache && !force) return capsCache;
 
   const cacheFile = path.join(path.dirname(dataDir()), "exec-caps.json");
-  const ver = (spawnSync(codexBinary(), ["--version"], { encoding: "utf8" }).stdout || "").trim();
+  // Таймаут обязателен: вызов синхронный и идёт в главном процессе сервера,
+  // поэтому зависший бинарь остановил бы обработку всех запросов разом.
+  const ver = (
+    spawnSync(codexBinary(), ["--version"], { encoding: "utf8", timeout: CODEX_PROBE_TIMEOUT_MS }).stdout || ""
+  ).trim();
 
   if (!force) {
     try {
@@ -362,6 +367,8 @@ export function buildArgs({ mode, model, effort, cwd, sandbox, images = [], resu
 // выглядит целым и молча уводит ревью мимо половины изменений.
 const DIFF_MAX_BYTES = 256 * 1024;
 const DIFF_MAX_FILES = 60;
+const DIFF_MAX_NAMES = 400;
+const LOG_MAX_COMMITS = 200;
 const UNTRACKED_FILE_MAX_BYTES = 24 * 1024;
 const UNTRACKED_TOTAL_MAX_BYTES = 128 * 1024;
 const UNTRACKED_MAX_FILES = 25;
@@ -478,12 +485,28 @@ function untrackedSection(cwd) {
       continue;
     }
 
+    // Читается тот же объект, который проверен: между lstat и чтением по имени
+    // файл успевает стать симлинком наружу. Дескриптор открывается без
+    // разыменования, и проверки повторяются уже по нему.
     let buf;
+    let fd;
     try {
-      buf = fs.readFileSync(abs);
+      fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const fst = fs.fstatSync(fd);
+      if (!fst.isFile() || fst.size > UNTRACKED_FILE_MAX_BYTES) {
+        listedOnly.push(C().untracked_unreadable(rel));
+        continue;
+      }
+      buf = fs.readFileSync(fd);
     } catch {
       listedOnly.push(C().untracked_unreadable(rel));
       continue;
+    } finally {
+      if (fd !== undefined) {
+        try {
+          fs.closeSync(fd);
+        } catch {}
+      }
     }
     if (!isProbablyText(buf)) {
       listedOnly.push(C().untracked_binary(rel));
@@ -508,16 +531,27 @@ function untrackedSection(cwd) {
  * загружается, если заведомо велик.
  */
 function diffOrSummary(cwd, range) {
-  const scope = range ? [range] : [];
+  const rangeArgs = range ? [range] : [];
+  // Секреты вырезаются и из отслеживаемых файлов тоже. Прежде фильтр стоял
+  // только на новых файлах, поэтому изменение уже добавленного в репозиторий
+  // .env или ключа уходило модели целиком, строка за строкой.
+  const secret = zSplit(gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--name-only", "-z", ...rangeArgs])).filter((p) =>
+    SECRETISH.test(p.replace(/\\/g, "/"))
+  );
+  const scope = secret.length
+    ? [...rangeArgs, "--", ".", ...secret.map((p) => `:(exclude,literal)${p}`)]
+    : rangeArgs;
+  const hidden = secret.length ? `\n\n${C().diff_secrets_hidden(secret.join("\n"))}` : "";
+
   const numstat = gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--numstat", ...scope]);
   const fileCount = numstat.split("\n").filter((l) => l.trim()).length;
-  if (!fileCount) return { text: C().no_changes, inline: true, fileCount: 0 };
+  if (!fileCount) return { text: (secret.length ? C().no_changes + hidden : C().no_changes), inline: true, fileCount: 0 };
 
   if (fileCount <= DIFF_MAX_FILES) {
     const r = git(cwd, ["diff", ...DIFF_FLAGS, ...scope], { maxBuffer: DIFF_MAX_BYTES });
     // ENOBUFS здесь означает «не поместилось»: stderr у git diff пуст, а
     // предел выставлен именно под ожидаемый объём патча.
-    if (!r.error && r.status === 0) return { text: r.stdout, inline: true, fileCount };
+    if (!r.error && r.status === 0) return { text: r.stdout + hidden, inline: true, fileCount };
     if (r.error && r.error.code !== "ENOBUFS") {
       throw new Error(C().git_diff_failed(r.error.message || r.error));
     }
@@ -527,12 +561,15 @@ function diffOrSummary(cwd, range) {
   }
 
   const shortstat = gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--shortstat", ...scope]).trim();
-  const names = zSplit(gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--name-status", "-z", ...scope]));
+  // Сводка тоже обязана иметь верхнюю границу: тысяча изменённых файлов даёт
+  // список имён на сотни килобайт, то есть ровно то, от чего сводка спасала.
+  const all = zSplit(gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--name-status", "-z", ...scope]));
+  const names = all.slice(0, DIFF_MAX_NAMES);
+  if (all.length > names.length) names.push(C().names_more(all.length - names.length));
   return {
     inline: false,
     fileCount,
-    text:
-      C().patch_too_big(range || "", shortstat || C().none, fileCount, names.join("\n")),
+    text: C().patch_too_big(range || "", shortstat || C().none, fileCount, names.join("\n")) + hidden,
   };
 }
 
@@ -571,8 +608,10 @@ export function collectDiff(cwd, base) {
   // Дерево чистое — сравнивать не с чем, поэтому берём ветку по умолчанию:
   // иначе команда возвращала пустоту и выглядела сломанной.
   let baseRef = base || null;
+  let isDirty = null;
   if (!baseRef) {
-    if (dirty()) return `${section(C().sec_reviewing, C().working_tree_only)}\n${workingTree()}`.trim();
+    isDirty = dirty();
+    if (isDirty) return `${section(C().sec_reviewing, C().working_tree_only)}\n${workingTree()}`.trim();
     baseRef = defaultBase(cwd);
     if (!baseRef) {
       throw new Error(C().clean_tree_no_base);
@@ -580,9 +619,27 @@ export function collectDiff(cwd, base) {
   }
 
   const baseSha = resolveCommit(cwd, baseRef);
-  const mergeBase = (git(cwd, ["merge-base", baseSha, "HEAD"]).stdout || "").trim() || baseSha;
+  // Отсутствие общего предка — не мелочь: сравнение с самой базой вместо точки
+  // расхождения показывает совсем другой набор изменений, и молча подменять
+  // одно другим нельзя.
+  const mb = git(cwd, ["merge-base", baseSha, "HEAD"]);
+  if (mb.error) throw new Error(C().git_not_started("merge-base", mb.error.message || mb.error));
+  const mergeBase = (mb.stdout || "").trim();
+  if (!mergeBase) throw new Error(C().no_merge_base(baseRef));
   const branch = (git(cwd, ["branch", "--show-current"]).stdout || "").trim() || "HEAD";
-  const log = gitChecked(cwd, ["log", "--oneline", "--no-decorate", `${mergeBase}..HEAD`]).trim();
+  const logAll = gitChecked(cwd, [
+    "log",
+    "--oneline",
+    "--no-decorate",
+    `--max-count=${LOG_MAX_COMMITS + 1}`,
+    `${mergeBase}..HEAD`,
+  ])
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  const log = (logAll.length > LOG_MAX_COMMITS ? [...logAll.slice(0, LOG_MAX_COMMITS), C().commits_more] : logAll).join(
+    "\n"
+  );
   const committed = diffOrSummary(cwd, `${mergeBase}..HEAD`);
 
   const head = C().branch_head(branch, baseRef, mergeBase.slice(0, 12));
@@ -592,7 +649,9 @@ export function collectDiff(cwd, base) {
     section(C().sec_branch_commits, log || C().no_commits),
     section(C().sec_committed, committed.text),
   ];
-  parts.push(dirty() ? workingTree() : section(C().sec_not_committed, C().clean_worktree));
+  // Состояние дерева уже выяснено выше, если база не была задана явно.
+  if (isDirty === null) isDirty = dirty();
+  parts.push(isDirty ? workingTree() : section(C().sec_not_committed, C().clean_worktree));
   return parts.join("\n").trim();
 }
 
@@ -665,8 +724,18 @@ export function explainCodexFailure(stderr, stdout = "") {
 
 const TERMINAL = new Set(["done", "failed", "cancelled", "timeout", "unknown"]);
 
+const JOB_TIMEOUT_DEFAULT_MIN = 30;
+const JOB_TIMEOUT_MAX_MIN = 480;
+
+/**
+ * Таймаут задачи. Значение приходит из настройки, поэтому проверяется:
+ * отрицательное отключало таймер воркера и одновременно срабатывало в
+ * реконсиляции, а Infinity непригоден для setTimeout.
+ */
 export function jobTimeoutMs() {
-  return (Number(envClean("CODEX_BRIDGE_JOB_TIMEOUT_MIN")) || 30) * 60_000;
+  const n = Number(envClean("CODEX_BRIDGE_JOB_TIMEOUT_MIN"));
+  const min = Number.isFinite(n) && n >= 1 ? Math.min(n, JOB_TIMEOUT_MAX_MIN) : JOB_TIMEOUT_DEFAULT_MIN;
+  return min * 60_000;
 }
 
 /**
@@ -719,8 +788,17 @@ function withStartLock(fn) {
         age = Date.now() - fs.statSync(lock).mtimeMs;
       } catch {}
       if (age > START_LOCK_STALE_MS) {
+        // Снятие через переименование, а не через rmdir: удалить и тут же
+        // создать заново — две операции, между которыми замок успевает взять
+        // другой процесс, и следующий rmdir снимает уже чужой живой замок.
+        // Переименовать существующий каталог удаётся ровно одному.
         try {
-          fs.rmdirSync(lock);
+          fs.renameSync(lock, `${lock}.stale.${process.pid}.${Date.now()}`);
+        } catch {}
+        try {
+          for (const name of fs.readdirSync(path.dirname(lock))) {
+            if (name.startsWith("start.lock.stale.")) fs.rmSync(path.join(path.dirname(lock), name), { recursive: true, force: true });
+          }
         } catch {}
         continue;
       }
@@ -763,9 +841,14 @@ export function liveJobs() {
     .filter(Boolean)
     .map(reconcile)
     .filter((j) => {
-      if (j.status !== "running" || !alive(j.pid)) return false;
-      // Задача, висящая дольше двойного таймаута, воркером уже была бы убита.
-      // Значит под этим pid работает чужой процесс — считать её живой нельзя.
+      // Считается процесс, а не статус. Отмена помечает задачу терминальной
+      // сразу, хотя воркер ещё жив и продолжает тратить квоту: если верить
+      // статусу, предел параллельных задач обходится одним codex_cancel.
+      if (readExitCode(j.id) !== null) return false;
+      if (!workerAlive(j)) return false;
+      // Метки жизни нет — формат старый, и единственная защита от чужого pid
+      // это возраст: дольше двойного таймаута задача уже была бы убита.
+      if (heartbeat(j.id).present) return true;
       const age = Date.now() - new Date(j.startedAt).getTime();
       return !(Number.isFinite(age) && age > staleMs);
     });
@@ -795,7 +878,11 @@ export function startJob(opts) {
 function startJobUnlocked(opts) {
   const id = `job-${crypto.randomBytes(4).toString("hex")}`;
   const cwd = opts.cwd || process.cwd();
-  const prompt = opts.prompt || buildPrompt({ ...opts, cwd });
+  // Нативному ревью промпт не нужен: цель протокола структурная. Он собирается
+  // только как материал для exec-fallback, поэтому невозможность его собрать
+  // запрещает fallback, но не сам запуск.
+  const allowFallback = opts.allowFallback !== false;
+  const prompt = opts.prompt || (allowFallback ? buildPrompt({ ...opts, cwd }) : "");
   const backend = opts.mode === "review" ? opts.backend || reviewBackend() : "exec";
 
   const promptFile = jobPath(id, "prompt");
@@ -803,6 +890,7 @@ function startJobUnlocked(opts) {
   const codeFile = jobPath(id, "code");
   const noteFile = jobPath(id, "note");
   const cancelFile = jobPath(id, "cancel");
+  const aliveFile = jobPath(id, "alive");
   const specFile = jobPath(id, "spec");
   writeFileSecure(promptFile, prompt);
 
@@ -817,8 +905,11 @@ function startJobUnlocked(opts) {
       codeFile,
       noteFile,
       cancelFile,
+      aliveFile,
+      heartbeatMs: HEARTBEAT_INTERVAL_MS,
       cwd,
       backend,
+      allowFallback,
       reviewTarget: opts.reviewTarget || null,
       appServerCommand: opts.appServerCommand || null,
       model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
@@ -828,18 +919,12 @@ function startJobUnlocked(opts) {
     })
   );
 
-  const worker = path.join(import.meta.dirname, "job-worker.mjs");
-  const child = spawn(process.execPath, [worker, specFile], {
-    cwd,
-    detached: true,
-    stdio: ["ignore", "ignore", "ignore"],
-    windowsHide: true,
-  });
-  child.unref();
-
-  const job = writeJob({
+  // Запись предшествует запуску. Обратный порядок оставлял бы процесс Codex,
+  // о котором никто не знает: сбой записи между spawn и writeJob делал его
+  // невидимым и для учёта, и для отмены.
+  const record = {
     id,
-    pid: child.pid ?? null,
+    pid: null,
     mode: opts.mode,
     backend,
     model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
@@ -853,7 +938,27 @@ function startJobUnlocked(opts) {
     exitCode: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
+  };
+  writeJob(record);
+
+  const worker = path.join(import.meta.dirname, "job-worker.mjs");
+  const child = spawn(process.execPath, [worker, specFile], {
+    cwd,
+    detached: true,
+    stdio: ["ignore", "ignore", "ignore"],
+    windowsHide: true,
   });
+  child.unref();
+
+  let job;
+  try {
+    job = writeJob({ ...record, pid: child.pid ?? null });
+  } catch (e) {
+    // Процесс уже идёт, а записать его pid не удалось: оставить его работать
+    // значит потерять управление им навсегда.
+    killTree(child.pid);
+    throw e;
+  }
 
   // Отказ запуска самого воркера: без этого задача осталась бы «running»
   // навсегда, а причина — только в stderr, которого никто не читает.
@@ -869,6 +974,39 @@ function startJobUnlocked(opts) {
   });
 
   return job;
+}
+
+/**
+ * Признак жизни воркера. Одного pid мало: номера переиспользуются, и тогда
+ * задача считалась бы живой по чужому процессу, а страховочный killTree убивал
+ * бы его. Воркер обновляет метку каждые несколько секунд, поэтому свежая метка
+ * означает именно наш процесс.
+ *
+ * Журналы прежних версий метки не имеют: для них остаётся прежнее правило по
+ * pid и возрасту, иначе задачи, пережившие обновление, разом стали бы мёртвыми.
+ */
+export const HEARTBEAT_INTERVAL_MS = 5_000;
+const HEARTBEAT_STALE_MS = 30_000;
+const STARTUP_GRACE_MS = 15_000;
+
+function heartbeat(id) {
+  try {
+    return { present: true, age: Date.now() - fs.statSync(jobPath(id, "alive")).mtimeMs };
+  } catch {
+    return { present: false, age: Infinity };
+  }
+}
+
+/** Воркер этой задачи точно жив — значит процесс наш и его можно трогать. */
+function workerAlive(job) {
+  // Первые секунды метки ещё нет: воркер только запускается. Без отсрочки
+  // задача объявлялась бы мёртвой прямо в момент старта.
+  const age = Date.now() - new Date(job.startedAt).getTime();
+  if (Number.isFinite(age) && age >= 0 && age < STARTUP_GRACE_MS) return true;
+  const hb = heartbeat(job.id);
+  if (hb.present) return hb.age < HEARTBEAT_STALE_MS;
+  // Старый формат: другого признака, кроме pid, нет.
+  return alive(job.pid);
 }
 
 function readNote(id) {
@@ -910,7 +1048,7 @@ function reconcile(job) {
     return writeJob(job);
   }
 
-  if (!alive(job.pid)) {
+  if (!workerAlive(job)) {
     // Процесса нет, кода возврата нет — считать успехом нельзя.
     job.status = "unknown";
     job.note = C().note_vanished;
@@ -919,9 +1057,11 @@ function reconcile(job) {
   }
 
   // Страховка на случай, если воркер умер, не успев отработать свой таймер.
+  // Убивать позволено только при подтверждённой метке жизни: без неё pid мог
+  // быть переиспользован, и под ним работает чужой процесс.
   const limit = jobTimeoutMs();
   if (Date.now() - new Date(job.startedAt).getTime() > limit) {
-    killTree(job.pid);
+    if (alive(job.pid)) killTree(job.pid);
     job.status = "timeout";
     job.finishedAt = new Date().toISOString();
     return writeJob(job);
@@ -929,19 +1069,46 @@ function reconcile(job) {
   return job;
 }
 
+// Хранилище задач ничем не ограничено, а в нём лежат промпты с полными дифами
+// и журналы событий. Уборка идёт только по завершённым и достаточно старым
+// задачам: работающую или недавнюю трогать нельзя — за ней ещё придут.
+const RETENTION_MS = 7 * 24 * 60 * 60_000;
+const RETENTION_KEEP = 200;
+const JOB_EXTS = ["json", "out", "prompt", "spec", "code", "note", "cancel", "alive"];
+let sweptAt = 0;
+
+function sweepJobs(jobs) {
+  if (Date.now() - sweptAt < 60 * 60_000) return;
+  sweptAt = Date.now();
+  const stale = jobs.filter((j) => {
+    if (!TERMINAL.has(j.status)) return false;
+    const at = new Date(j.finishedAt || j.startedAt).getTime();
+    return Number.isFinite(at) && Date.now() - at > RETENTION_MS;
+  });
+  const extra = jobs.filter((j) => TERMINAL.has(j.status)).slice(RETENTION_KEEP);
+  for (const j of new Set([...stale, ...extra])) {
+    for (const ext of JOB_EXTS) {
+      try {
+        fs.rmSync(jobPath(j.id, ext), { force: true });
+      } catch {}
+    }
+  }
+}
+
 export function listJobs(cwd) {
   const dir = dataDir();
   const repo = repoKey(cwd || process.cwd());
-  return fs
+  const all = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith(".json"))
     .map((f) => f.replace(/\.json$/, ""))
     .filter(isValidJobId)
     .map(readJob)
     .filter(Boolean)
-    .filter((j) => !repo || j.repo === repo)
     .map(reconcile)
     .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+  sweepJobs(all);
+  return all.filter((j) => !repo || j.repo === repo);
 }
 
 export function latestJob(cwd) {
@@ -1027,6 +1194,10 @@ export async function followJob(id, { timeoutMs = 0, onEvent, signal, pollMs = 2
   let offset = 0;
   let tail = "";
   const events = [];
+  // Границы чтений произвольны относительно многобайтных символов: обычный
+  // toString на стыке превращал бы кириллицу в замену. Декодер удерживает
+  // незавершённую последовательность до следующего куска.
+  const decoder = new StringDecoder("utf8");
 
   const drain = () => {
     let chunk = "";
@@ -1038,7 +1209,7 @@ export async function followJob(id, { timeoutMs = 0, onEvent, signal, pollMs = 2
           const buf = Buffer.alloc(size - offset);
           fs.readSync(fd, buf, 0, buf.length, offset);
           offset = size;
-          chunk = buf.toString("utf8");
+          chunk = decoder.write(buf);
         }
       } finally {
         fs.closeSync(fd);

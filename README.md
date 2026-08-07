@@ -147,9 +147,11 @@ On enable, Claude Code prompts for a few values — all optional:
 | Setting | What it controls |
 |---|---|
 | `default_model` | Default Codex model. See `/codex-bridge:models` for the list |
-| `default_effort` | Reasoning level: `low`, `medium`, `high`, `xhigh`, `max`. The exact set depends on the model — see `/codex-bridge:models` |
+| `default_effort` | Reasoning level: `none`, `low`, `medium`, `high`, `xhigh`, `max`. The exact set depends on the model — see `/codex-bridge:models` |
+| `review_backend` | Review transport: `exec` by default, or the opt-in native `app-server` reviewer with safe fallback before acceptance |
 | `reasoning_summary` | `detailed` — verbose reasoning summaries in the trail, `auto` — Codex decides (there may be none) |
 | `progress_notifications` | Stream the work trail while the call is running. Turn it off if your Claude Code build drops the connection on such notifications — see Troubleshooting |
+| `max_parallel_jobs` | Maximum concurrent Codex jobs (default 4; `0` removes the limit) |
 | `job_timeout_minutes` | When to kill a stuck background job (default 30) |
 | `image_output_dir` | Where images go (default `assets/generated`) |
 | `image_timeout_minutes` | Image generation timeout (default 15) |
@@ -275,7 +277,7 @@ Note that `/codex-bridge:image` takes 4–6 minutes — Codex reasons first and 
 Architecture, internals, tests, and publishing live in **[README_DEV.md](README_DEV.md)**.
 
 ```bash
-node tests/regressions.mjs   # 27 tests, no real codex/claude needed
+node tests/regressions.mjs   # self-contained tests; no real codex or claude needed
 ```
 
 Run without installing: `claude --plugin-dir /path/to/claude-codex-bridge`

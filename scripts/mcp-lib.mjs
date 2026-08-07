@@ -14,6 +14,10 @@ const PROTOCOL = SUPPORTED[0];
 // а поток уведомлений в клиенте — тоже ресурс.
 const PROGRESS_MIN_INTERVAL_MS = 250;
 
+// Предел на одно входящее сообщение. Промпты и дифы идут наружу, а не внутрь,
+// поэтому запас здесь избыточен и служит только защитой от разрастания памяти.
+const MAX_LINE_BYTES = 16 * 1024 * 1024;
+
 /**
  * Аварийный выключатель ленты прогресса.
  *
@@ -82,6 +86,15 @@ export function serve({ name, version = "0.1.0", tools, handle }) {
 
   readline.createInterface({ input: process.stdin }).on("line", async (line) => {
     if (!line.trim()) return;
+    // Одна строка — одно сообщение, и её размер ничем не ограничен. Разбор
+    // такой строки удваивает расход памяти, поэтому отказ выдаётся до parse.
+    if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) {
+      return send({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32600, message: message("mcp_line_too_long", MAX_LINE_BYTES) },
+      });
+    }
     let msg;
     try {
       msg = JSON.parse(line);
@@ -94,6 +107,17 @@ export function serve({ name, version = "0.1.0", tools, handle }) {
         jsonrpc: "2.0",
         id: null,
         error: { code: -32600, message: message("mcp_batches_unsupported") },
+      });
+    }
+    // Проверка до разбора полей: `null` и скаляры — синтаксически верный JSON,
+    // и деструктуризация такого сообщения роняла весь сервер вместе со всеми
+    // живыми вызовами. Обработчик readline асинхронный, поэтому исключение
+    // здесь никем не ловится.
+    if (msg === null || typeof msg !== "object") {
+      return send({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32600, message: message("mcp_not_an_object") },
       });
     }
     const { id, method, params } = msg;

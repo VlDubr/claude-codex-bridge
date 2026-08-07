@@ -146,6 +146,7 @@ const MESSAGES = {
     codex_not_found: "Codex CLI was not found. Install it with: npm install -g @openai/codex",
     generation_timeout: (minutes) =>
       `Generation did not finish within ${minutes} min. It normally takes 4–6 minutes and can take longer at 4K.`,
+    generation_cancelled: "Image generation was cancelled and the Codex process was stopped.",
     codex_failed: (status, reason, stderr, tail) =>
       (reason ? `${reason}\n\n` : "") +
       `Codex exited with code ${status}.` +
@@ -200,6 +201,7 @@ const MESSAGES = {
     codex_not_found: "Codex CLI не найден. Установи: npm install -g @openai/codex",
     generation_timeout: (minutes) =>
       `Генерация не уложилась в ${minutes} мин. Обычно занимает 4–6 минут; при 4K бывает дольше.`,
+    generation_cancelled: "Генерация изображения отменена, процесс Codex остановлен.",
     codex_failed: (status, reason, stderr, tail) =>
       (reason ? `${reason}\n\n` : "") +
       `Codex завершился с кодом ${status}.` +

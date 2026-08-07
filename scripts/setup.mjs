@@ -194,11 +194,16 @@ if (opts["allow-task"] || opts["deny-task"]) {
 
 if (opts["link-back"]) {
   const r = link();
-  lines.push(
-    "",
-    message(r.action === "added" ? "setup_back_added" : "setup_back_updated", CONFIG_PATH),
-    `  ${r.bridge}`
-  );
+  if (r.action === "conflict") {
+    lines.push("", r.error);
+    process.exitCode = 1;
+  } else {
+    lines.push(
+      "",
+      message(r.action === "added" ? "setup_back_added" : "setup_back_updated", CONFIG_PATH),
+      `  ${r.bridge}`
+    );
+  }
 }
 if (opts["unlink-back"]) {
   const r = unlink();

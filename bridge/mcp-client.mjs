@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { pluginVersion } from "../scripts/version.mjs";
 import { message } from "../scripts/i18n-runtime.mjs";
+import { killTree, isWindows } from "../scripts/proc.mjs";
 
 const PROTOCOL = "2025-06-18";
 
@@ -45,7 +46,13 @@ export class McpStdioClient {
           reject(e);
         },
       });
-      this.#send({ jsonrpc: "2.0", id, method, params });
+      try {
+        this.#send({ jsonrpc: "2.0", id, method, params });
+      } catch (e) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(e);
+      }
     });
   }
 
@@ -54,6 +61,7 @@ export class McpStdioClient {
       cwd: this.cwd,
       env: { ...process.env, ...this.env },
       stdio: ["pipe", "pipe", "pipe"],
+      detached: !isWindows,
     });
 
     const failAll = (e) => {
@@ -62,6 +70,9 @@ export class McpStdioClient {
       this.pending.clear();
     };
     this.child.on("error", failAll);
+    // EPIPE приходит на stdin-поток, а не обязательно на ChildProcess.
+    // После него транспорт непригоден, поэтому все ожидающие RPC отклоняются.
+    this.child.stdin.on("error", failAll);
     // Без этого вызов после смерти сервера висел бы до полного таймаута.
     this.child.on("exit", (code, signal) =>
       failAll(
@@ -116,8 +127,7 @@ export class McpStdioClient {
   }
 
   stop() {
-    try {
-      this.child?.kill("SIGTERM");
-    } catch {}
+    this.ready = false;
+    if (this.child?.pid) killTree(this.child.pid);
   }
 }
