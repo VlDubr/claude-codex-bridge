@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",
@@ -45,6 +45,14 @@
       "description": "Лента действий Codex отправляется клиенту как notifications/progress. Выключите, если ваша сборка Claude Code задета дефектом anthropics/claude-code#47378: там получение таких уведомлений закрывает соединение с MCP-сервером и следующий вызов падает с \"Connection closed\".",
       "default": true,
       "required": false
+    },
+    "max_parallel_jobs": {
+      "type": "number",
+      "title": "Предел одновременных задач Codex",
+      "description": "Сколько задач может выполняться сразу. Каждая — отдельный процесс Codex, расходующий квоту ChatGPT и память. Ноль снимает предел.",
+      "default": 4,
+      "min": 0,
+      "max": 32
     },
     "job_timeout_minutes": {
       "type": "number",

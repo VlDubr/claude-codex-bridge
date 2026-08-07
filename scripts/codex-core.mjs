@@ -759,7 +759,115 @@ export function jobTimeoutMs() {
  * обработчик exit в родителе не переживает перезапуск MCP-сервера и создавал
  * гонку с cancelJob().
  */
+// Замок на запуск. Подсчёт живых задач и старт нового воркера обязаны быть
+// одной операцией: двум экземплярам MCP-сервера иначе видно одно и то же
+// число задач, и предел они пробивают одновременно.
+const START_LOCK_STALE_MS = 30_000;
+const START_LOCK_WAIT_MS = 500;
+const START_LOCK_RETRY_MS = 25;
+
+/** Предел живых задач. Ноль — без предела. */
+export function maxParallelJobs() {
+  const raw = envClean("CODEX_BRIDGE_MAX_PARALLEL_JOBS");
+  if (raw === undefined) return 4;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 4;
+  return Math.floor(n);
+}
+
+// Ожидание без прокрутки цикла: startJob синхронный, а замок держат
+// миллисекунды. Иначе пришлось бы жечь процессор в busy-loop.
+const sleepSync = (ms) => {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {}
+};
+
+function withStartLock(fn) {
+  const lock = path.join(dataDir(), "start.lock");
+  const deadline = Date.now() + START_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.mkdirSync(lock);
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      let age = Infinity;
+      try {
+        age = Date.now() - fs.statSync(lock).mtimeMs;
+      } catch {}
+      if (age > START_LOCK_STALE_MS) {
+        try {
+          fs.rmdirSync(lock);
+        } catch {}
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        const err = new Error("Запуск задачи занят другим вызовом дольше обычного. Повтори через несколько секунд.");
+        err.busy = true;
+        throw err;
+      }
+      sleepSync(START_LOCK_RETRY_MS);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.rmdirSync(lock);
+    } catch {}
+  }
+}
+
+/**
+ * Живые задачи по всему хранилищу.
+ *
+ * Предел общий, а не по репозиторию: квота ChatGPT, память и процессорное
+ * время машины — один ресурс на все проекты сразу.
+ */
+export function liveJobs() {
+  let names = [];
+  try {
+    names = fs.readdirSync(dataDir());
+  } catch {
+    return [];
+  }
+  const staleMs = jobTimeoutMs() * 2;
+  return names
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""))
+    .filter(isValidJobId)
+    .map(readJob)
+    .filter(Boolean)
+    .map(reconcile)
+    .filter((j) => {
+      if (j.status !== "running" || !alive(j.pid)) return false;
+      // Задача, висящая дольше двойного таймаута, воркером уже была бы убита.
+      // Значит под этим pid работает чужой процесс — считать её живой нельзя.
+      const age = Date.now() - new Date(j.startedAt).getTime();
+      return !(Number.isFinite(age) && age > staleMs);
+    });
+}
+
 export function startJob(opts) {
+  return withStartLock(() => {
+    const limit = maxParallelJobs();
+    if (limit > 0) {
+      const live = liveJobs();
+      if (live.length >= limit) {
+        const err = new Error(
+          `Уже выполняется ${live.length} задач при пределе ${limit}. Дождись их или сними лишние через codex_cancel:\n` +
+            live.map((j) => `  · ${j.id} — ${j.mode}${j.label ? `: ${j.label.slice(0, 60)}` : ""}`).join("\n")
+        );
+        err.busy = true;
+        throw err;
+      }
+    }
+    return startJobUnlocked(opts);
+  });
+}
+
+function startJobUnlocked(opts) {
   const id = `job-${crypto.randomBytes(4).toString("hex")}`;
   const cwd = opts.cwd || process.cwd();
   const prompt = opts.prompt || buildPrompt({ ...opts, cwd });

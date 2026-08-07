@@ -149,6 +149,7 @@ await tExec("2c. дескрипторы не текут при массовом 
   const d = fresh("jobs-fd");
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS = "0"; // тест про дескрипторы, предел здесь мешает
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?fd=${Date.now()}`);
 
   const count = () => {
@@ -164,6 +165,7 @@ await tExec("2c. дескрипторы не текут при массовом 
   await sleep(200);
   const leaked = count() - before;
   assert.ok(leaked < 10, `утечка ${leaked} дескрипторов на 40 задач`);
+  delete process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS;
 });
 
 // ───────────────────────────────── 3. Path traversal через job_id
@@ -1540,9 +1542,152 @@ await tExec("25h. символическая ссылка не разымено�
   assert.match(out, /символическая ссылка/, "симлинк не помечен");
 });
 
-// ───────────────────────────────── 26. Версия из единственного источника
+// ───────────────────────────────── 26. Предел одновременных задач
 
-await t("26. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
+/**
+ * Живой процесс-пустышка. Свой pid сюда подставлять нельзя: reconcile убивает
+ * просроченные задачи, и тест застрелил бы сам себя.
+ */
+function victim() {
+  const c = spawn(process.execPath, ["-e", "setTimeout(()=>{},60000)"], { stdio: "ignore" });
+  c.unref();
+  return c;
+}
+
+/** Задача в сторе, чей процесс заведомо жив. */
+function fakeLiveJob(dataRoot, id, { pid, ageMs = 0 } = {}) {
+  const dir = path.join(dataRoot, "jobs");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `${id}.json`),
+    JSON.stringify({
+      id,
+      pid,
+      mode: "delegate",
+      label: "занятая задача",
+      cwd: dataRoot,
+      repo: dataRoot,
+      status: "running",
+      exitCode: null,
+      startedAt: new Date(Date.now() - ageMs).toISOString(),
+      finishedAt: null,
+    })
+  );
+}
+
+await t("26a. предел одновременных задач не пробивается", async () => {
+  const d = fresh("limit-hit");
+  const data = path.join(d, "data");
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  process.env.CODEX_BIN = path.join(d, "codex-которого-нет");
+  process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS = "1";
+  const v1 = victim();
+  fakeLiveJob(data, "job-aaaaaaaa", { pid: v1.pid });
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?l1=${Date.now()}`);
+  assert.equal(core.liveJobs().length, 1, "живая задача не посчитана");
+
+  let caught = null;
+  try {
+    core.startJob({ mode: "delegate", task: "вторая", cwd: d, prompt: "x" });
+  } catch (e) {
+    caught = e;
+  }
+  assert.ok(caught, "вторая задача запустилась при пределе 1");
+  assert.equal(caught.busy, true, "отказ не помечен как «занято»");
+  assert.match(caught.message, /job-aaaaaaaa/, "в отказе не перечислены живые задачи");
+
+  const created = fs.readdirSync(path.join(data, "jobs")).filter((f) => f.endsWith(".json"));
+  assert.equal(created.length, 1, "отклонённая задача всё же оставила след в хранилище");
+  v1.kill();
+  delete process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS;
+});
+
+await t("26b. нулевой предел снимает ограничение", async () => {
+  const d = fresh("limit-off");
+  const data = path.join(d, "data");
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  process.env.CODEX_BIN = path.join(d, "codex-которого-нет");
+  process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS = "0";
+  const v2 = victim();
+  fakeLiveJob(data, "job-bbbbbbbb", { pid: v2.pid });
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?l2=${Date.now()}`);
+  const job = core.startJob({ mode: "delegate", task: "вторая", cwd: d, prompt: "x" });
+  assert.ok(job?.id, "при нулевом пределе задача не запустилась");
+  v2.kill();
+  delete process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS;
+});
+
+await t("26c. задача, висящая дольше двойного таймаута, живой не считается", async () => {
+  const d = fresh("limit-stale");
+  const data = path.join(d, "data");
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  process.env.CODEX_BIN = path.join(d, "codex-которого-нет");
+  process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN = "1";
+  // Три минуты при таймауте в одну: воркер убил бы её давно, значит под этим
+  // pid работает уже чужой процесс.
+  const v3 = victim();
+  fakeLiveJob(data, "job-cccccccc", { pid: v3.pid, ageMs: 3 * 60_000 });
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?l3=${Date.now()}`);
+  assert.equal(core.liveJobs().length, 0, "переиспользованный pid принят за живую задачу");
+  try { v3.kill(); } catch {}
+  delete process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN;
+});
+
+await tExec("26d. предел выдерживается при одновременном запуске из двух процессов", async () => {
+  const d = fresh("limit-race");
+  const data = path.join(d, "data");
+  fs.writeFileSync(path.join(d, "codex"), "#!/usr/bin/env node\nsetTimeout(()=>process.exit(0),30000);\n", {
+    mode: 0o755,
+  });
+
+  const starter = path.join(d, "start.mjs");
+  fs.writeFileSync(
+    starter,
+    `import { startJob } from ${JSON.stringify(`${ROOT_URL}/scripts/codex-core.mjs`)};
+try {
+  const j = startJob({ mode: "delegate", task: "гонка", cwd: ${JSON.stringify(d)}, prompt: "x" });
+  console.log("STARTED " + j.id);
+} catch (e) {
+  console.log(e?.busy ? "BUSY" : "ERROR " + (e?.message || e));
+}`
+  );
+
+  const env = {
+    ...process.env,
+    CLAUDE_PLUGIN_DATA: data,
+    CODEX_BIN: path.join(d, "codex"),
+    CODEX_BRIDGE_MAX_PARALLEL_JOBS: "1",
+  };
+  const run = () =>
+    new Promise((resolve) => {
+      const c = spawn(process.execPath, [starter], { env });
+      let out = "";
+      c.stdout.on("data", (b) => (out += b));
+      c.on("close", () => resolve(out.trim()));
+    });
+
+  const results = await Promise.all([run(), run(), run()]);
+  const started = results.filter((r) => r.startsWith("STARTED"));
+  const busy = results.filter((r) => r === "BUSY");
+
+  assert.equal(started.length, 1, `при пределе 1 запустилось ${started.length}: ${results.join(" | ")}`);
+  assert.equal(busy.length, 2, `отказов «занято» ${busy.length}: ${results.join(" | ")}`);
+
+  for (const line of started) {
+    const id = line.split(" ")[1];
+    const job = JSON.parse(fs.readFileSync(path.join(data, "jobs", `${id}.json`), "utf8"));
+    try {
+      process.kill(job.pid, "SIGKILL");
+    } catch {}
+  }
+});
+
+// ───────────────────────────────── 27. Версия из единственного источника
+
+await t("28. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
   const { pluginVersion } = await import(`${ROOT_URL}/scripts/version.mjs?v=${Date.now()}`);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"));
   assert.equal(pluginVersion(), manifest.version, "версия разошлась с манифестом");
@@ -1556,7 +1701,7 @@ await t("26. версия MCP-серверов берётся из манифе�
   }
 });
 
-await t("27. у каждой команды объявлен свой набор инструментов", async () => {
+await t("29. у каждой команды объявлен свой набор инструментов", async () => {
   const dir = path.join(ROOT, "commands");
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
   assert.ok(files.length >= 14, `команд найдено ${files.length}`);

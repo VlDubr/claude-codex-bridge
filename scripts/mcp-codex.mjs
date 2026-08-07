@@ -307,7 +307,20 @@ function applyDefaults(args, cwd) {
   };
 }
 
+/**
+ * Отказы «занято» — не сбой сервера, а нормальный ответ: предел параллельных
+ * задач или занятый тред чата. Без этого они уходили клиенту как -32603.
+ */
 async function handleTool(name, args, ctx = {}) {
+  try {
+    return await dispatchTool(name, args, ctx);
+  } catch (e) {
+    if (e?.busy) return err(e.message || String(e));
+    throw e;
+  }
+}
+
+async function dispatchTool(name, args, ctx = {}) {
   if (CLI_TOOLS.has(name)) {
     const problem = await guard();
     if (problem) return err(problem);
