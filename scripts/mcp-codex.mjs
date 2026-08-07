@@ -27,31 +27,22 @@ import { describe } from "./codex-events.mjs";
 import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
 import { readChat, writeChat, listChats, deleteChat, withChatLock, isValidSlug } from "./chat-store.mjs";
 import { readPrefs, writePrefs } from "./prefs.mjs";
+import { toolText } from "./i18n.mjs";
 
-const EFFORT_DESC =
-  "Уровень reasoning. Набор зависит от модели: точный список отдаёт codex_models. Значение minimal принимают только модели прошлых поколений — gpt-5.6 и новее отвергают его ошибкой API.";
+const T = toolText();
+const EFFORT_DESC = T.effort;
 
 const TOOLS = [
   {
     name: "codex_ask",
-    description:
-      "Спросить у GPT (Codex) второе мнение синхронно и получить ответ в этом же ходе. Используй, когда нужно сверить архитектурное решение, проверить свою гипотезу или получить контраргумент перед тем, как писать код. Отвечает за 1-3 минуты.",
+    description: T.ask_d,
     inputSchema: {
       type: "object",
       properties: {
-        question: { type: "string", description: "Вопрос к GPT, сформулированный самодостаточно." },
-        context: {
-          type: "string",
-          description:
-            "Твой текущий контекст: что ты уже выяснил, какое решение предлагаешь, какие есть сомнения. Чем конкретнее, тем полезнее ответ.",
-        },
-        model: { type: "string", description: "Модель Codex, напр. gpt-5.6-sol или gpt-5.4-mini." },
-        wait_seconds: {
-          type: "number",
-          default: 90,
-          description:
-            "Сколько ждать синхронного ответа. Если Codex не успеет, вызов не падает по таймауту: та же самая работа продолжается тем же процессом в фоне и возвращается job_id вместе с лентой прогресса — дальше следи через codex_progress.",
-        },
+        question: { type: "string", description: T.ask_question },
+        context: { type: "string", description: T.ask_context },
+        model: { type: "string", description: T.ask_model },
+        wait_seconds: { type: "number", default: 90, description: T.ask_wait },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
       },
       required: ["question"],
@@ -59,65 +50,51 @@ const TOOLS = [
   },
   {
     name: "codex_chat",
-    description:
-      "Поговорить с моделью Codex как с отдельным собеседником: тред сохраняется, модель помнит предыдущие сообщения. Используй, когда нужен диалог, а не одиночный вопрос, или когда задачу ведёт конкретная модель GPT.",
+    description: T.chat_d,
     inputSchema: {
       type: "object",
       properties: {
-        message: { type: "string", description: "Сообщение модели." },
-        chat: {
-          type: "string",
-          description:
-            "Имя разговора (латиница, цифры, дефис). Одно имя — один непрерывный тред. По умолчанию default.",
-        },
-        model: {
-          type: "string",
-          description: "Модель Codex для этого разговора. Задаётся на первом сообщении и дальше повторяется сама.",
-        },
+        message: { type: "string", description: T.chat_message },
+        chat: { type: "string", description: T.chat_chat },
+        model: { type: "string", description: T.chat_model },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
-        context: { type: "string", description: "Дополнительный контекст к первому сообщению разговора." },
-        write: {
-          type: "boolean",
-          default: false,
-          description: "Разрешить модели менять файлы в рабочем каталоге. По умолчанию только чтение.",
-        },
-        wait_seconds: { type: "number", default: 120, description: "Сколько ждать ответа в этом же ходе." },
+        context: { type: "string", description: T.chat_context },
+        write: { type: "boolean", default: false, description: T.chat_write },
+        wait_seconds: { type: "number", default: 120, description: T.chat_wait },
       },
       required: ["message"],
     },
   },
   {
     name: "codex_chats",
-    description: "Список разговоров с моделями Codex; можно забыть разговор вместе с его тредом.",
+    description: T.chats_d,
     inputSchema: {
       type: "object",
       properties: {
-        forget: { type: "string", description: "Имя разговора, который надо забыть." },
+        forget: { type: "string", description: T.chats_forget },
       },
     },
   },
   {
     name: "codex_use",
-    description:
-      "Выбрать модель и уровень reasoning по умолчанию для этого репозитория. Действует на последующие вызовы, у которых модель не указана явно.",
+    description: T.use_d,
     inputSchema: {
       type: "object",
       properties: {
-        model: { type: "string", description: "Модель Codex. Пустая строка — сброс к настройке плагина." },
+        model: { type: "string", description: T.use_model },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
-        clear: { type: "boolean", description: "Сбросить и модель, и уровень reasoning." },
+        clear: { type: "boolean", description: T.use_clear },
       },
     },
   },
   {
     name: "codex_review",
-    description:
-      "Запустить обычное ревью кода силами GPT по текущим изменениям. По умолчанию в фоне.",
+    description: T.review_d,
     inputSchema: {
       type: "object",
       properties: {
-        base: { type: "string", description: "Базовая ветка для ревью всей ветки, напр. main." },
-        focus: { type: "string", description: "Опциональный дополнительный фокус." },
+        base: { type: "string", description: T.review_base },
+        focus: { type: "string", description: T.review_focus },
         background: { type: "boolean", default: true },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
@@ -126,16 +103,12 @@ const TOOLS = [
   },
   {
     name: "codex_challenge",
-    description:
-      "Состязательное ревью: GPT оспаривает дизайн-решение, ищет неучтённые режимы отказа и предлагает альтернативы. Используй перед мержем крупного изменения.",
+    description: T.challenge_d,
     inputSchema: {
       type: "object",
       properties: {
-        focus: {
-          type: "string",
-          description: "Что именно оспорить: 'схема ретраев', 'выбор кеша', 'модель прав доступа'.",
-        },
-        base: { type: "string" },
+        focus: { type: "string", description: T.challenge_focus },
+        base: { type: "string", description: T.review_base },
         background: { type: "boolean", default: true },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
@@ -144,76 +117,63 @@ const TOOLS = [
   },
   {
     name: "codex_delegate",
-    description:
-      "Делегировать GPT задачу с правом изменять файлы: исследовать баг, починить тест, отрефакторить кусок. " +
-      "Показывает ленту хода работы, пока ждёт; если GPT не уложился, работа продолжается в фоне и возвращается job_id.",
+    description: T.delegate_d,
     inputSchema: {
       type: "object",
       properties: {
-        task: { type: "string", description: "Описание задачи для GPT, максимально конкретное." },
+        task: { type: "string", description: T.delegate_task },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
-        wait_seconds: {
-          type: "number",
-          default: 120,
-          description:
-            "Сколько ждать с показом ленты действий GPT. Ноль — сразу уйти в фон и вернуть job_id. " +
-            "По истечении вызов не падает: та же работа продолжается тем же процессом.",
-        },
+        wait_seconds: { type: "number", default: 120, description: T.delegate_wait },
       },
       required: ["task"],
     },
   },
   {
     name: "codex_models",
-    description:
-      "Получить список моделей, реально доступных в этом окружении Codex. Спрашивает у самого Codex, а не берёт из зашитого списка. Вызови это, прежде чем указывать model в других инструментах, если не уверен в имени.",
+    description: T.models_d,
     inputSchema: {
       type: "object",
       properties: {
-        refresh: { type: "boolean", description: "Игнорировать кэш и перечитать каталог." },
+        refresh: { type: "boolean", description: T.models_refresh },
       },
     },
   },
   {
     name: "codex_progress",
-    description:
-      "Показать, чем модель занята прямо сейчас: лента её рассуждений, запущенных команд, правок файлов и поисков. Используй вместо ожидания вслепую, когда задача идёт долго.",
+    description: T.progress_d,
     inputSchema: {
       type: "object",
       properties: {
-        job_id: { type: "string", description: "По умолчанию последняя задача." },
-        limit: { type: "number", default: 12, description: "Сколько последних шагов показать." },
-        detail: { type: "boolean", default: false, description: "Показать сводки размышлений целиком." },
-        wait_seconds: {
-          type: "number",
-          description: "Подождать новые события столько секунд, показывая их по мере появления.",
-        },
+        job_id: { type: "string", description: T.progress_job },
+        limit: { type: "number", default: 12, description: T.progress_limit },
+        detail: { type: "boolean", default: false, description: T.progress_detail },
+        wait_seconds: { type: "number", description: T.progress_wait },
       },
     },
   },
   {
     name: "codex_status",
-    description: "Показать статус фоновых задач Codex для текущего репозитория.",
+    description: T.status_d,
     inputSchema: {
       type: "object",
-      properties: { job_id: { type: "string", description: "Опционально: конкретная задача." } },
+      properties: { job_id: { type: "string", description: T.status_job } },
     },
   },
   {
     name: "codex_result",
-    description: "Получить финальный вывод завершённой фоновой задачи Codex.",
+    description: T.result_d,
     inputSchema: {
       type: "object",
       properties: {
-        job_id: { type: "string", description: "Опционально: по умолчанию последняя задача." },
-        tail: { type: "number", description: "Вернуть только последние N строк." },
+        job_id: { type: "string", description: T.result_job },
+        tail: { type: "number", description: T.result_tail },
       },
     },
   },
   {
     name: "codex_cancel",
-    description: "Отменить выполняющуюся фоновую задачу Codex.",
+    description: T.cancel_d,
     inputSchema: {
       type: "object",
       properties: { job_id: { type: "string" } },

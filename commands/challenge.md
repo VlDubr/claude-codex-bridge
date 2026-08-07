@@ -1,13 +1,13 @@
 ---
-description: Состязательное ревью — GPT оспаривает дизайн-решение
-argument-hint: "[--base <ветка>] [--now] <что оспорить>"
+description: Adversarial review — GPT challenges a design decision
+argument-hint: "[--base <branch>] [--now] <what to challenge>"
 allowed-tools: mcp__plugin_codex-bridge_codex__codex_challenge
 ---
 
-Пользователь просит состязательное ревью. Аргументы: `$ARGUMENTS`
+The user is requesting an adversarial review. Arguments: `$ARGUMENTS`
 
-Вызови инструмент **codex_challenge**, передав в `focus` содержательную часть аргументов, в `base` — значение после `--base`, и `background: false` при наличии `--now`.
+Call **codex_challenge**, passing the substantive part of the arguments in `focus`, putting the `base` value from the argument after `--base`, and setting `background: false` when `--now` is present.
 
-Если фокус не задан явно, не оставляй его пустым: посмотри на изменения и сформулируй сам, какое именно решение стоит оспорить — самое рискованное или наименее обратимое.
+If the focus is not specified explicitly, do not leave it empty: inspect the changes and identify which decision should be challenged—the riskiest or least reversible one.
 
-Когда результат придёт, не защищайся автоматически. По каждому возражению GPT скажи одно из трёх: принимаю, отвергаю (и почему), нужно проверить (и как). Это самая ценная часть твоего ответа.
+When the result arrives, do not become defensive automatically. For each objection from GPT, give one of three responses: accept, reject (and explain why), or needs verification (and explain how). This is the most valuable part of your response.

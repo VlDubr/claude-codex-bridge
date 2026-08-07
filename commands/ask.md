@@ -1,11 +1,11 @@
 ---
-description: Спросить второе мнение у GPT прямо сейчас
-argument-hint: "<вопрос>"
+description: Ask GPT for a second opinion right now
+argument-hint: "<question>"
 allowed-tools: mcp__plugin_codex-bridge_codex__codex_ask
 ---
 
-Пользователь хочет мнение GPT по вопросу: `$ARGUMENTS`
+The user wants GPT's opinion on this question: `$ARGUMENTS`
 
-Вызови **codex_ask**. В поле `context` обязательно передай то, что знаешь ты, а GPT — нет: над чем вы сейчас работаете, какие варианты уже отброшены и почему, какие ограничения проекта существенны. Без этого ответ будет общим и бесполезным.
+Call **codex_ask**. In the `context` field, be sure to include what you know but GPT does not: what you are currently working on, which options have already been rejected and why, and which project constraints matter. Without this context, the response will be generic and unhelpful.
 
-Покажи ответ GPT дословно, затем — свою позицию. Если вы расходитесь, назови точку расхождения прямо, не сглаживай.
+Show GPT's response verbatim, followed by your own position. If you disagree, state the exact point of disagreement directly; do not smooth it over.

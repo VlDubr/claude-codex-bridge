@@ -1,15 +1,15 @@
 ---
-description: Поговорить с моделью Codex как с отдельным собеседником (тред помнит предыдущие ходы)
-argument-hint: "[--model <модель>] [--chat <имя>] [--write] <сообщение>"
+description: Talk to a Codex model as a separate conversational partner (the thread remembers previous turns)
+argument-hint: "[--model <model>] [--chat <name>] [--write] <message>"
 allowed-tools: mcp__plugin_codex-bridge_codex__codex_chat, mcp__plugin_codex-bridge_codex__codex_chats
 ---
 
-Пользователь обращается к модели Codex: `$ARGUMENTS`
+The user is addressing a Codex model: `$ARGUMENTS`
 
-Разбери аргументы: `--model` — имя модели Codex, `--chat` — имя треда (по умолчанию `default`), `--write` — разрешить модели менять файлы. Остальное — сообщение модели.
+Parse the arguments: `--model` is the Codex model name, `--chat` is the thread name (`default` by default), and `--write` allows the model to modify files. Everything else is the message to the model.
 
-Вызови **codex_chat** с этими полями. Модель и уровень reasoning задаются на первом ходе и дальше повторяются сами — на продолжении их передавать не нужно.
+Call **codex_chat** with these fields. The model and reasoning level are set on the first turn and are reused automatically afterward; you do not need to pass them when continuing the conversation.
 
-Ответ модели покажи дословно и отдельно от своих комментариев: пользователь должен видеть, где говорит GPT, а где ты. Ход работы приводи, если он объясняет ответ.
+Show the model's response verbatim and separately from your own comments: the user must be able to see where GPT is speaking and where you are. Include the work log if it helps explain the response.
 
-Список разговоров — **codex_chats**. Если тред потерян, скажи об этом прямо и предложи забыть разговор (`codex_chats` с `forget`), а не начинай новый молча.
+Use **codex_chats** to list conversations. If the thread is lost, say so directly and offer to forget the conversation (`codex_chats` with `forget`) instead of silently starting a new one.

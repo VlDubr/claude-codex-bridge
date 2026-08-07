@@ -1717,6 +1717,50 @@ await t("29. у каждой команды объявлен свой набор
   }
 });
 
+// ───────────────────────────────── 30. Язык описаний и промптов
+
+await t("30a. по умолчанию промпты и описания уходят на английском", async () => {
+  delete process.env.CODEX_BRIDGE_LANG;
+  const i18n = await import(`${ROOT_URL}/scripts/i18n.mjs?en=${Date.now()}`);
+  assert.equal(i18n.lang(), "en");
+  assert.match(i18n.prompt("ask", "why?"), /second opinion/, "промпт не на английском");
+  assert.match(i18n.toolText().ask_d, /Ask GPT/, "описание инструмента не на английском");
+});
+
+await t("30b. настройка переключает язык, неизвестное значение игнорируется", async () => {
+  process.env.CODEX_BRIDGE_LANG = "ru";
+  const ru = await import(`${ROOT_URL}/scripts/i18n.mjs?ru=${Date.now()}`);
+  assert.equal(ru.lang(), "ru");
+  assert.match(ru.prompt("ask", "почему?"), /второе мнение/, "русский промпт не подставился");
+  assert.match(ru.toolText().ask_d, /Спросить у GPT/, "русское описание не подставилось");
+
+  process.env.CODEX_BRIDGE_LANG = "klingon";
+  assert.equal(ru.lang(), "en", "неизвестный язык не откатился к английскому");
+  delete process.env.CODEX_BRIDGE_LANG;
+});
+
+await t("30c. недостающий перевод не оставляет описание пустым", async () => {
+  process.env.CODEX_BRIDGE_LANG = "ru";
+  const i18n = await import(`${ROOT_URL}/scripts/i18n.mjs?fb=${Date.now()}`);
+  const ru = i18n.toolText();
+  delete process.env.CODEX_BRIDGE_LANG;
+  const en = i18n.toolText();
+
+  for (const key of Object.keys(en)) {
+    assert.ok(ru[key] && String(ru[key]).trim(), `ключ ${key} пуст при русском языке`);
+  }
+});
+
+await t("30d. команды и агенты остаются на английском", async () => {
+  const cyr = /[Ѐ-ӿ]/;
+  for (const dir of ["commands", "agents"]) {
+    for (const f of fs.readdirSync(path.join(ROOT, dir))) {
+      const src = fs.readFileSync(path.join(ROOT, dir, f), "utf8");
+      assert.ok(!cyr.test(src), `${dir}/${f}: остался русский текст — переключателя языка у статических файлов нет`);
+    }
+  }
+});
+
 // ───────────────────────────────── отчёт
 
 const failed = results.filter((r) => !r.ok);

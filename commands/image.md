@@ -1,54 +1,54 @@
 ---
-description: Сгенерировать изображение (GPT Image 2) и проверить его на соответствие задаче
-argument-hint: "[--ar 16:9] [--res 2K] [--ref файл|url] [--out каталог] [--no-check] <описание>"
+description: Generate an image (GPT Image 2) and verify that it meets the requirements
+argument-hint: "[--ar 16:9] [--res 2K] [--ref file|url] [--out directory] [--no-check] <description>"
 allowed-tools: mcp__plugin_codex-bridge_image__image_generate, mcp__plugin_codex-bridge_image__image_check_params, Read
 ---
 
-Пользователь просит изображение: `$ARGUMENTS`
+The user is requesting an image: `$ARGUMENTS`
 
-## 1. Разбери аргументы
+## 1. Parse the arguments
 
 - `--ar` → `aspect_ratio` (1:1, 9:16, 16:9, 4:3, 3:4, auto)
 - `--res` → `image_resolution` (1K, 2K, 4K)
-- `--ref` → добавить в `images` (повторяемый; путь к локальному файлу, до 16 штук)
+- `--ref` → add to `images` (repeatable; path to a local file, up to 16 files)
 - `--out` → `out_dir`
-- `--name` → основа имени файла
-- остальное → `prompt`
+- `--name` → base filename
+- everything else → `prompt`
 
-Помни про ограничения: при `auto` доступен только 1K, при `1:1` недоступен 4K. Если пользователь просит несовместимое, не отправляй запрос вслепую — назови конфликт и предложи ближайший рабочий вариант (например, для квадрата в максимуме — 2K).
+Keep the constraints in mind: `auto` supports only 1K, while `1:1` does not support 4K. If the user requests an incompatible combination, do not send the request blindly—identify the conflict and suggest the closest supported option (for example, the maximum resolution for a square image is 2K).
 
-Если каталог назначения не указан, а в проекте уже есть очевидное место для ассетов (`assets/`, `public/images/`, `static/img/`), используй его вместо дефолта и скажи об этом.
+If no output directory is specified and the project already has an obvious location for assets (`assets/`, `public/images/`, `static/img/`), use it instead of the default and mention that choice.
 
-## 2. Расширь промпт
+## 2. Expand the prompt
 
-Короткую просьбу пользователя разверни в осмысленное описание: объект, композиция и ракурс, стиль, освещение, палитра, фон, и отдельно — чего в кадре быть не должно. Модель отрабатывает конкретику намного лучше, чем общие слова. Покажи пользователю финальный промпт одной строкой, чтобы он видел, что именно ушло в генерацию.
+Expand the user's brief request into a meaningful description: subject, composition and camera angle, style, lighting, palette, background, and—separately—what must not appear in the image. The model handles specifics much better than generalities. Show the user the final prompt on one line so they can see exactly what was sent for generation.
 
-## 3. Сгенерируй
+## 3. Generate the image
 
-Вызови **image_generate**. Перед дорогой генерацией в 4K имеет смысл сначала проверить параметры через **image_check_params**.
+Call **image_generate**. Before an expensive 4K generation, it is worth checking the parameters with **image_check_params** first.
 
-Рисует встроенный инструмент Codex (gpt-image-2) на авторизации ChatGPT — API-ключ не нужен, расход идёт по лимитам подписки. Вызов занимает 4–6 минут, при 4K дольше: предупреди пользователя и не считай долгое ожидание сбоем.
+The built-in Codex tool (gpt-image-2) generates the image using ChatGPT authentication—no API key is required, and usage counts against the subscription limits. A call takes 4–6 minutes, and longer at 4K: warn the user and do not treat a long wait as a failure.
 
-Референсы — только локальные файлы: URL встроенный инструмент не принимает. Если пользователь дал ссылку, сначала скачай изображение в проект, затем передай путь.
+References must be local files: the built-in tool does not accept URLs. If the user provided a link, first download the image into the project, then pass its path.
 
-## 4. Проверь результат — это обязательный шаг
+## 4. Verify the result—this step is mandatory
 
-Открой сохранённый файл инструментом **Read**: ты видишь изображения и можешь их оценить. Сверь по пунктам:
+Open the saved file with the **Read** tool: you can see images and evaluate them. Check each item:
 
-- Присутствует ли главный объект и таков ли он, как просили?
-- Соблюдены ли явные требования — количество объектов, цвета, текст, ракурс?
-- Нет ли того, что просили исключить?
-- Нет ли грубых артефактов: лишние конечности, поплывший текст, обрезанная композиция?
-- Подходит ли пропорция под заявленное назначение?
+- Is the main subject present, and does it match the request?
+- Are the explicit requirements satisfied—the number of objects, colors, text, and camera angle?
+- Is everything that was supposed to be excluded absent?
+- Are there any obvious artifacts: extra limbs, distorted text, or cropped composition?
+- Is the aspect ratio suitable for the stated use?
 
-Дай честный вердикт. Не выдавай «в целом похоже» за успех.
+Give an honest verdict. Do not present “roughly similar” as success.
 
-## 5. Итерируй при расхождении
+## 5. Iterate when the result does not match
 
-Если результат не соответствует, не отдавай его пользователю как готовый. Уточни промпт, целясь ровно в найденное расхождение, и сгенерируй заново — до двух повторов без дополнительного спроса. Если и после этого не сходится, покажи лучший вариант, объясни, что именно не получилось, и предложи изменить формулировку или добавить референс.
+If the result does not match the requirements, do not present it to the user as finished. Refine the prompt to target the exact mismatch and generate it again—up to two retries without asking again. If it still does not match after that, show the best version, explain exactly what did not work, and suggest changing the wording or adding a reference.
 
-Если `--no-check` — пропусти шаги 4 и 5 и просто отдай путь к файлу.
+If `--no-check` is set, skip steps 4 and 5 and simply return the file path.
 
-## 6. Отчитайся
+## 6. Report the outcome
 
-Путь к файлу относительно корня проекта, использованные параметры, результат проверки и сколько попыток потребовалось.
+Provide the file path relative to the project root, the parameters used, the verification result, and the number of attempts required.
