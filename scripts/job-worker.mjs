@@ -15,12 +15,13 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { killTree } from "./proc.mjs";
 import { STDOUT_LINE, STDERR_LINE } from "./codex-events.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const FILE_MODE = 0o600;
 
 const specPath = process.argv[2];
 if (!specPath) {
-  process.stderr.write("job-worker: не передан путь к spec\n");
+  process.stderr.write(message("worker_spec_missing"));
   process.exit(2);
 }
 const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
@@ -43,7 +44,7 @@ function finish(code, note) {
     fs.writeFileSync(`${spec.codeFile}.tmp`, String(code), { mode: FILE_MODE });
     fs.renameSync(`${spec.codeFile}.tmp`, spec.codeFile);
   } catch (e) {
-    process.stderr.write(`job-worker: не удалось записать код возврата: ${e?.message || e}\n`);
+    process.stderr.write(message("worker_exit_code_write_failed", e?.message || e));
   }
   out.end(() => process.exit(0));
 }
@@ -57,7 +58,7 @@ const child = spawn(spec.bin, spec.args, {
 
 child.on("error", (e) => {
   // Отказ запуска — это failed с причиной, а не «процесс исчез».
-  append(JSON.stringify({ type: "turn.failed", error: { message: `не удалось запустить Codex: ${e?.message || e}` } }));
+  append(JSON.stringify({ type: "turn.failed", error: { message: message("worker_spawn_failed", e?.message || e) } }));
   finish(127, "spawn_failed");
 });
 
@@ -68,7 +69,7 @@ try {
   child.stdin.write(prompt);
   child.stdin.end();
 } catch (e) {
-  process.stderr.write(`job-worker: промпт не прочитан: ${e?.message || e}\n`);
+  process.stderr.write(message("worker_prompt_read_failed", e?.message || e));
 }
 child.stdin.on("error", () => {}); // закрытый stdin не должен ронять воркер
 
@@ -97,7 +98,7 @@ readline.createInterface({ input: child.stderr }).on("line", (line) => {
 
 const limit = Number(spec.timeoutMs) || 0;
 const timer = limit > 0 ? setTimeout(() => {
-  append(JSON.stringify({ type: "turn.failed", error: { message: `таймаут задачи: ${Math.round(limit / 1000)}с` } }));
+  append(JSON.stringify({ type: "turn.failed", error: { message: message("worker_timeout", Math.round(limit / 1000)) } }));
   killTree(child.pid);
   finish(124, "timeout");
 }, limit) : null;

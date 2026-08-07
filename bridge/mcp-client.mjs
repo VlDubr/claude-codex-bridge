@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { pluginVersion } from "../scripts/version.mjs";
+import { message } from "../scripts/i18n-runtime.mjs";
 
 const PROTOCOL = "2025-06-18";
 
@@ -32,7 +33,7 @@ export class McpStdioClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`${this.alias}: таймаут на ${method}`));
+        reject(new Error(message("client_timeout", this.alias, method)));
       }, this.timeoutMs);
       this.pending.set(id, {
         resolve: (v) => {
@@ -65,7 +66,7 @@ export class McpStdioClient {
     this.child.on("exit", (code, signal) =>
       failAll(
         new Error(
-          `${this.alias}: процесс сервера завершился (${signal ? `сигнал ${signal}` : `код ${code}`})` +
+          message("client_server_exited", this.alias, signal ? message("client_signal", signal) : message("client_code", code)) +
             (this.stderr ? `: ${this.stderr.trim().slice(-500)}` : "")
         )
       )
@@ -108,7 +109,7 @@ export class McpStdioClient {
   async call(name, args) {
     if (!this.ready) {
       throw new Error(
-        `${this.alias}: сервер недоступен${this.stderr ? `. stderr: ${this.stderr.trim().slice(-500)}` : ""}`
+        message("client_unavailable", this.alias) + (this.stderr ? `. stderr: ${this.stderr.trim().slice(-500)}` : "")
       );
     }
     return this.#request("tools/call", { name, arguments: args || {} });

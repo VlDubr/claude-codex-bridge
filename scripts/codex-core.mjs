@@ -18,7 +18,10 @@ import {
   streamText,
 } from "./codex-events.mjs";
 import { alive, killTree } from "./proc.mjs";
-import { prompt } from "./i18n.mjs";
+import { prompt, uiText, coreText } from "./i18n.mjs";
+
+// Тексты берутся на каждый вызов: язык задаётся окружением процесса.
+const C = coreText;
 
 // ---------------------------------------------------------------- пути и стор
 
@@ -67,12 +70,12 @@ export function dataDir() {
  */
 function jobPath(id, ext) {
   if (typeof id !== "string" || !JOB_ID_RE.test(id)) {
-    throw new Error(`Недопустимый идентификатор задачи: ${JSON.stringify(id)}`);
+    throw new Error(C().bad_job_id(JSON.stringify(id)));
   }
   const dir = dataDir();
   const p = path.resolve(dir, `${id}.${ext}`);
   if (path.dirname(p) !== path.resolve(dir)) {
-    throw new Error(`Путь задачи вышел за пределы каталога: ${id}`);
+    throw new Error(C().job_path_escape(id));
   }
   return p;
 }
@@ -375,9 +378,9 @@ function git(cwd, args, { maxBuffer = 64 * 1024 * 1024 } = {}) {
 /** Git обязан отработать: молчаливый пустой вывод неотличим от «изменений нет». */
 function gitChecked(cwd, args) {
   const r = git(cwd, args);
-  if (r.error) throw new Error(`git ${args[0]} не запустился: ${r.error.message || r.error}`);
+  if (r.error) throw new Error(C().git_not_started(args[0], r.error.message || r.error));
   if (r.status !== 0) {
-    throw new Error(`git ${args.join(" ")} завершился с кодом ${r.status}: ${(r.stderr || "").trim() || "без вывода"}`);
+    throw new Error(C().git_failed(args.join(" "), r.status, (r.stderr || "").trim() || C().git_no_output));
   }
   return r.stdout || "";
 }
@@ -394,7 +397,7 @@ function resolveCommit(cwd, ref) {
   const r = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
   const sha = (r.stdout || "").trim();
   if (r.status !== 0 || !sha) {
-    throw new Error(`Ссылка ${JSON.stringify(ref)} не разрешается в коммит этого репозитория.`);
+    throw new Error(C().ref_not_commit(JSON.stringify(ref)));
   }
   return sha;
 }
@@ -438,7 +441,7 @@ function untrackedSection(cwd) {
       // лежащий вне репозитория.
       st = fs.lstatSync(abs);
     } catch {
-      listedOnly.push(`${rel} — нечитаем`);
+      listedOnly.push(C().untracked_unreadable(rel));
       continue;
     }
     if (st.isSymbolicLink()) {
@@ -446,27 +449,27 @@ function untrackedSection(cwd) {
       try {
         target = fs.readlinkSync(abs);
       } catch {}
-      listedOnly.push(`${rel} — символическая ссылка на ${target}`);
+      listedOnly.push(C().untracked_symlink(rel, target));
       continue;
     }
     if (st.isDirectory()) {
-      listedOnly.push(`${rel} — каталог`);
+      listedOnly.push(C().untracked_directory(rel));
       continue;
     }
     if (!st.isFile()) {
-      listedOnly.push(`${rel} — не обычный файл`);
+      listedOnly.push(C().untracked_not_regular(rel));
       continue;
     }
     if (SECRETISH.test(rel.replace(/\\/g, "/"))) {
-      listedOnly.push(`${rel} — похоже на секрет, содержимое не показано`);
+      listedOnly.push(C().untracked_secret(rel));
       continue;
     }
     if (st.size > UNTRACKED_FILE_MAX_BYTES) {
-      listedOnly.push(`${rel} — ${st.size} Б, больше предела ${UNTRACKED_FILE_MAX_BYTES} Б`);
+      listedOnly.push(C().untracked_too_big(rel, st.size, UNTRACKED_FILE_MAX_BYTES));
       continue;
     }
     if (totalBytes + st.size > UNTRACKED_TOTAL_MAX_BYTES) {
-      listedOnly.push(`${rel} — не поместился в общий предел`);
+      listedOnly.push(C().untracked_over_total(rel));
       continue;
     }
 
@@ -474,11 +477,11 @@ function untrackedSection(cwd) {
     try {
       buf = fs.readFileSync(abs);
     } catch {
-      listedOnly.push(`${rel} — нечитаем`);
+      listedOnly.push(C().untracked_unreadable(rel));
       continue;
     }
     if (!isProbablyText(buf)) {
-      listedOnly.push(`${rel} — двоичный`);
+      listedOnly.push(C().untracked_binary(rel));
       continue;
     }
     totalBytes += buf.length;
@@ -486,10 +489,10 @@ function untrackedSection(cwd) {
   }
 
   if (files.length > UNTRACKED_MAX_FILES) {
-    listedOnly.push(`… и ещё ${files.length - UNTRACKED_MAX_FILES} файлов сверх предела ${UNTRACKED_MAX_FILES}`);
+    listedOnly.push(C().untracked_more(files.length - UNTRACKED_MAX_FILES, UNTRACKED_MAX_FILES));
   }
   if (listedOnly.length) {
-    parts.push(`### Показаны только именами\n${listedOnly.map((l) => `- ${l}`).join("\n")}`);
+    parts.push(`### ${C().untracked_listed_only}\n${listedOnly.map((l) => `- ${l}`).join("\n")}`);
   }
   return parts.join("\n\n");
 }
@@ -503,7 +506,7 @@ function diffOrSummary(cwd, range) {
   const scope = range ? [range] : [];
   const numstat = gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--numstat", ...scope]);
   const fileCount = numstat.split("\n").filter((l) => l.trim()).length;
-  if (!fileCount) return { text: "(изменений нет)", inline: true, fileCount: 0 };
+  if (!fileCount) return { text: C().no_changes, inline: true, fileCount: 0 };
 
   if (fileCount <= DIFF_MAX_FILES) {
     const r = git(cwd, ["diff", ...DIFF_FLAGS, ...scope], { maxBuffer: DIFF_MAX_BYTES });
@@ -511,10 +514,10 @@ function diffOrSummary(cwd, range) {
     // предел выставлен именно под ожидаемый объём патча.
     if (!r.error && r.status === 0) return { text: r.stdout, inline: true, fileCount };
     if (r.error && r.error.code !== "ENOBUFS") {
-      throw new Error(`git diff не выполнен: ${r.error.message || r.error}`);
+      throw new Error(C().git_diff_failed(r.error.message || r.error));
     }
     if (!r.error && r.status !== 0) {
-      throw new Error(`git diff завершился с кодом ${r.status}: ${(r.stderr || "").trim() || "без вывода"}`);
+      throw new Error(C().git_failed("diff", r.status, (r.stderr || "").trim() || C().git_no_output));
     }
   }
 
@@ -524,15 +527,11 @@ function diffOrSummary(cwd, range) {
     inline: false,
     fileCount,
     text:
-      `Патч слишком велик, чтобы вложить его целиком, и обрезать его посередине нельзя — ` +
-      `обрезанный патч выглядит полным. Прочитай нужные места сам, только на чтение: ` +
-      `\`git diff ${range || ""}\`.`.replace(/\s+`\.$/, "`.") +
-      `\n\nСводка: ${shortstat || "нет"}\nФайлов изменено: ${fileCount}\n\n` +
-      names.join("\n"),
+      C().patch_too_big(range || "", shortstat || C().none, fileCount, names.join("\n")),
   };
 }
 
-const section = (title, body) => `## ${title}\n\n${String(body || "").trim() || "(пусто)"}\n`;
+const section = (title, body) => `## ${title}\n\n${String(body || "").trim() || C().empty_section}\n`;
 
 /**
  * Контекст для ревью.
@@ -545,7 +544,7 @@ const section = (title, body) => `## ${title}\n\n${String(body || "").trim() || 
  */
 export function collectDiff(cwd, base) {
   if (git(cwd, ["rev-parse", "--show-toplevel"]).status !== 0) {
-    throw new Error("Это не git-репозиторий — ревьюить нечего.");
+    throw new Error(C().not_a_repo);
   }
 
   const dirty = () => {
@@ -560,7 +559,7 @@ export function collectDiff(cwd, base) {
     // а проиндексованное — то, что человек уже готовит к коммиту, — исчезает.
     const d = diffOrSummary(cwd, "HEAD");
     const untracked = untrackedSection(cwd);
-    return section("Ещё не закоммичено", d.text) + (untracked ? `\n${section("Новые файлы", untracked)}` : "");
+    return section(C().sec_not_committed, d.text) + (untracked ? `\n${section(C().sec_new_files, untracked)}` : "");
   };
 
   // Без base и с грязным деревом ревьюится то, над чем идёт работа.
@@ -568,10 +567,10 @@ export function collectDiff(cwd, base) {
   // иначе команда возвращала пустоту и выглядела сломанной.
   let baseRef = base || null;
   if (!baseRef) {
-    if (dirty()) return `${section("Ревьюется", "Незакоммиченные изменения рабочего дерева.")}\n${workingTree()}`.trim();
+    if (dirty()) return `${section(C().sec_reviewing, C().working_tree_only)}\n${workingTree()}`.trim();
     baseRef = defaultBase(cwd);
     if (!baseRef) {
-      throw new Error("Рабочее дерево чистое, а ветку по умолчанию найти не удалось. Укажи base явно.");
+      throw new Error(C().clean_tree_no_base);
     }
   }
 
@@ -581,13 +580,14 @@ export function collectDiff(cwd, base) {
   const log = gitChecked(cwd, ["log", "--oneline", "--no-decorate", `${mergeBase}..HEAD`]).trim();
   const committed = diffOrSummary(cwd, `${mergeBase}..HEAD`);
 
-  const head =
-    `Ветка ${branch} относительно ${baseRef} (общий предок ${mergeBase.slice(0, 12)}).\n` +
-    `Ниже две части: закоммиченное в ветке и то, что ещё не закоммичено. ` +
-    `Первое уйдёт в PR, второе — нет.`;
+  const head = C().branch_head(branch, baseRef, mergeBase.slice(0, 12));
 
-  const parts = [section("Ревьюется", head), section("Коммиты ветки", log || "(коммитов нет)"), section("Изменения в коммитах", committed.text)];
-  parts.push(dirty() ? workingTree() : section("Ещё не закоммичено", "(рабочее дерево чистое)"));
+  const parts = [
+    section(C().sec_reviewing, head),
+    section(C().sec_branch_commits, log || C().no_commits),
+    section(C().sec_committed, committed.text),
+  ];
+  parts.push(dirty() ? workingTree() : section(C().sec_not_committed, C().clean_worktree));
   return parts.join("\n").trim();
 }
 
@@ -633,11 +633,7 @@ export function explainCodexFailure(stderr, stdout = "") {
     const supported = [...all.matchAll(/'([a-z]+)'/gi)]
       .map((m) => m[1])
       .filter((v) => ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(v) && v !== eff[1]);
-    return (
-      `Модель ${eff[2]} не принимает уровень усилий "${eff[1]}".` +
-      (supported.length ? ` Поддерживаются: ${[...new Set(supported)].join(", ")}.` : "") +
-      ` Задай другой уровень аргументом effort или в настройке default_effort плагина.`
-    );
+    return C().effort_unsupported(eff[2], eff[1], supported.length ? [...new Set(supported)].join(", ") : "");
   }
 
   // Сбой песочницы Windows. Наружу выходит как "mcp ... (failed)" или
@@ -645,39 +641,17 @@ export function explainCodexFailure(stderr, stdout = "") {
   // мёртвый сервер, хотя причина в рассинхроне версий установки Codex.
   const helper = /orchestrator_helper_launch_failed|helper=([\w.-]*sandbox[\w.-]*)|codex-windows-sandbox-setup/i.exec(all);
   if (helper || (/windows sandbox/i.test(all) && /program not found|failed to launch/i.test(all))) {
-    return (
-      `Не запустилась песочница Windows: Codex не нашёл вспомогательный бинарь` +
-      (helper?.[1] ? ` (${helper[1]})` : "") +
-      `. Это не отказ MCP-сервера и не отмена пользователем — мост исправен.\n` +
-      `Обычная причина: установка Codex собрана из разных версий (CLI одной версии, ` +
-      `хелперы в ~/.codex/.sandbox-bin другой).\n` +
-      `Что делать: переустановить Codex целиком (npm install -g @openai/codex) — это решает причину; ` +
-      `либо, как временный обход, включить настройку плагина bypass_sandbox, ` +
-      `но тогда Codex будет выполнять команды без изоляции. Диагностика: /codex-bridge:setup`
-    );
+    return C().sandbox_windows(helper?.[1] ? ` (${helper[1]})` : "");
   }
 
   if (/user cancelled MCP tool call|tool call was cancelled/i.test(all) && !/interrupt/i.test(all)) {
-    return (
-      `Codex сообщил об отмене вызова инструмента. Если вы ничего не отменяли, ` +
-      `наиболее вероятная причина — сбой песочницы Codex, который выходит наружу именно так. ` +
-      `Проверьте: /codex-bridge:setup`
-    );
+    return C().mcp_cancelled;
   }
 
-  if (/not logged in|no credentials|unauthorized|401/i.test(all)) {
-    return "Codex не авторизован или сессия истекла. Выполни в терминале: codex login";
-  }
-  if (/rate.?limit|quota|429/i.test(all)) {
-    return "Достигнут лимит подписки ChatGPT. Подожди сброса квоты или смени модель на более дешёвую.";
-  }
+  if (/not logged in|no credentials|unauthorized|401/i.test(all)) return C().not_authorized;
+  if (/rate.?limit|quota|429/i.test(all)) return C().quota;
   if (/unexpected argument\s+'?(--[\w-]+)/i.test(all)) {
-    const flag = /unexpected argument\s+'?(--[\w-]+)/i.exec(all)[1];
-    return (
-      `Эта сборка Codex не знает флаг ${flag}. Кэш определения флагов устарел — ` +
-      `он привязан к версии бинаря и обновится сам, но можно сбросить вручную: ` +
-      `удали exec-caps.json в каталоге данных плагина.`
-    );
+    return C().unknown_flag(/unexpected argument\s+'?(--[\w-]+)/i.exec(all)[1]);
   }
   return null;
 }
@@ -746,7 +720,7 @@ function withStartLock(fn) {
         continue;
       }
       if (Date.now() >= deadline) {
-        const err = new Error("Запуск задачи занят другим вызовом дольше обычного. Повтори через несколько секунд.");
+        const err = new Error(C().start_lock_busy);
         err.busy = true;
         throw err;
       }
@@ -799,8 +773,11 @@ export function startJob(opts) {
       const live = liveJobs();
       if (live.length >= limit) {
         const err = new Error(
-          `Уже выполняется ${live.length} задач при пределе ${limit}. Дождись их или сними лишние через codex_cancel:\n` +
+          C().limit_reached(
+            live.length,
+            limit,
             live.map((j) => `  · ${j.id} — ${j.mode}${j.label ? `: ${j.label.slice(0, 60)}` : ""}`).join("\n")
+          )
         );
         err.busy = true;
         throw err;
@@ -869,7 +846,7 @@ function startJobUnlocked(opts) {
     try {
       fs.appendFileSync(
         outFile,
-        JSON.stringify({ type: "turn.failed", error: { message: `не удалось запустить воркер: ${e?.message || e}` } }) + "\n"
+        JSON.stringify({ type: "turn.failed", error: { message: C().worker_spawn_failed(e?.message || e) } }) + "\n"
       );
       writeFileSecure(codeFile, "127");
       writeFileSecure(noteFile, "spawn_failed");
@@ -899,9 +876,9 @@ function readExitCode(id) {
 
 // Пометка воркера о причине завершения → статус и человеческое объяснение.
 const NOTE_STATUS = {
-  timeout: ["timeout", "Задача остановлена по таймауту."],
-  cancelled: ["cancelled", "Задача отменена."],
-  spawn_failed: ["failed", "Codex не запустился: проверь установку (npm install -g @openai/codex)."],
+  timeout: ["timeout", "note_timeout"],
+  cancelled: ["cancelled", "note_cancelled"],
+  spawn_failed: ["failed", "note_spawn_failed"],
 };
 
 /** Приводит статус в соответствие с реальностью. Терминальные не трогает. */
@@ -912,7 +889,7 @@ function reconcile(job) {
   if (code !== null) {
     const mapped = NOTE_STATUS[readNote(job.id)];
     job.status = mapped ? mapped[0] : code === 0 ? "done" : "failed";
-    if (mapped) job.note = mapped[1];
+    if (mapped) job.note = C()[mapped[1]]; // в таблице лежит ключ, не текст
     job.exitCode = code;
     job.finishedAt = job.finishedAt || new Date().toISOString();
     return writeJob(job);
@@ -921,7 +898,7 @@ function reconcile(job) {
   if (!alive(job.pid)) {
     // Процесса нет, кода возврата нет — считать успехом нельзя.
     job.status = "unknown";
-    job.note = "Процесс исчез, не записав код возврата. Результат недостоверен.";
+    job.note = C().note_vanished;
     job.finishedAt = job.finishedAt || new Date().toISOString();
     return writeJob(job);
   }
@@ -998,10 +975,10 @@ export function jobThreadId(id) {
 }
 
 export function cancelJob(id) {
-  if (!isValidJobId(id)) return { ok: false, error: `Недопустимый идентификатор задачи: ${id}` };
+  if (!isValidJobId(id)) return { ok: false, error: C().bad_job_id(id) };
   const job = readJob(id);
-  if (!job) return { ok: false, error: `Задача ${id} не найдена.` };
-  if (TERMINAL.has(job.status)) return { ok: true, job, note: `Уже в статусе ${job.status}.` };
+  if (!job) return { ok: false, error: C().job_not_found(id) };
+  if (TERMINAL.has(job.status)) return { ok: true, job, note: C().already_status(job.status) };
 
   killTree(job.pid);
   job.status = "cancelled";
@@ -1078,7 +1055,7 @@ export async function followJob(id, { timeoutMs = 0, onEvent, signal, pollMs = 2
 /** Результат завершённой задачи в том же виде, что и раньше у runSync. */
 export function jobResult(id) {
   const job = resolveJob(id);
-  if (!job) return { ok: false, error: "Задача не найдена." };
+  if (!job) return { ok: false, error: C().job_not_found_plain };
 
   const raw = jobOutput(id);
   const parsed = extractOutput(raw);
@@ -1099,7 +1076,7 @@ export function jobResult(id) {
   );
 
   if (job.status === "done") return { ok: true, job, output: out, stderr: noise, trail };
-  if (job.status === "running") return { ok: false, job, running: true, trail, error: "Задача ещё выполняется." };
+  if (job.status === "running") return { ok: false, job, running: true, trail, error: C().job_still_running };
 
   // Ненулевой код — всегда ошибка, даже если что-то успело напечататься:
   // частичный отчёт, выданный за успех, опаснее пустого отказа.
@@ -1113,10 +1090,10 @@ export function jobResult(id) {
     trail,
     error:
       (reason ? `${reason}\n\n` : "") +
-      `Codex завершился со статусом ${job.status}${job.exitCode === null ? "" : ` (код ${job.exitCode})`}.` +
+      C().codex_exit(job.status, job.exitCode) +
       (noise ? `\n${noise.slice(0, 800)}` : "") +
-      (trail.length ? `\n\nХод работы:\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
-      (out && !reason ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
+      (trail.length ? `\n\n${C().trail_label}\n${trail.map((l) => `  · ${l}`).join("\n")}` : "") +
+      (out && !reason ? `\n\n${C().partial_output(out.slice(0, 800))}` : ""),
   };
 }
 
@@ -1144,8 +1121,9 @@ export function jobTrail(id, { limit = 40 } = {}) {
 }
 
 export function humanAge(iso) {
+  const u = uiText();
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return `${s}с`;
-  if (s < 3600) return `${Math.round(s / 60)}м`;
-  return `${(s / 3600).toFixed(1)}ч`;
+  if (s < 60) return u.age_seconds(s);
+  if (s < 3600) return u.age_minutes(Math.round(s / 60));
+  return u.age_hours((s / 3600).toFixed(1));
 }

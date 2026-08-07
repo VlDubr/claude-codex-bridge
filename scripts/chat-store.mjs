@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "./codex-core.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -33,10 +34,10 @@ export function isValidThreadId(id) {
 }
 
 function chatPath(slug, ext = "json") {
-  if (!isValidSlug(slug)) throw new Error(`Недопустимое имя чата: ${JSON.stringify(slug)}`);
+  if (!isValidSlug(slug)) throw new Error(message("chat_invalid_name", slug));
   const dir = chatsDir();
   const p = path.resolve(dir, `${slug}.${ext}`);
-  if (path.dirname(p) !== path.resolve(dir)) throw new Error(`Путь чата вышел за пределы каталога: ${slug}`);
+  if (path.dirname(p) !== path.resolve(dir)) throw new Error(message("chat_path_outside", slug));
   return p;
 }
 
@@ -95,7 +96,7 @@ export async function withChatLock(slug, fn) {
       age = Date.now() - fs.statSync(lock).mtimeMs;
     } catch {}
     if (age < LOCK_STALE_MS) {
-      const err = new Error(`Чат "${slug}" сейчас занят другим ходом. Дождись ответа или начни новый чат.`);
+      const err = new Error(message("chat_busy", slug));
       err.busy = true;
       throw err;
     }
@@ -104,7 +105,7 @@ export async function withChatLock(slug, fn) {
       fs.rmdirSync(lock);
       fs.mkdirSync(lock);
     } catch {
-      const err = new Error(`Не удалось снять устаревший замок чата "${slug}".`);
+      const err = new Error(message("chat_stale_lock", slug));
       err.busy = true;
       throw err;
     }

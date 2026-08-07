@@ -8,6 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { lang } from "./i18n.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const envClean = (n) => {
   const v = process.env[n];
@@ -47,11 +49,11 @@ function tomlString(s) {
 
 function block(bridge) {
   return `${MARK_START}
-# Управляется плагином codex-bridge. Путь обновляется автоматически при
-# обновлении плагина — правки внутри блока будут перезаписаны.
+${message("linkback_managed_block")}
 [${SERVER_TABLE}]
 command = "node"
 args = [${tomlString(bridge)}]
+env = { CODEX_BRIDGE_LANG = ${tomlString(lang())} }
 ${MARK_END}`;
 }
 
@@ -95,6 +97,13 @@ export function linkedPath() {
   return raw.replace(/\\(["\\nrt])/g, (_, c) => ({ n: "\n", r: "\r", t: "\t" })[c] || c);
 }
 
+function hasCurrentLanguage() {
+  const cur = read();
+  if (!cur) return false;
+  const managed = new RegExp(`${esc(MARK_START)}[\\s\\S]*?${esc(MARK_END)}`, "m").exec(cur)?.[0];
+  return Boolean(managed?.includes(`env = { CODEX_BRIDGE_LANG = ${tomlString(lang())} }`));
+}
+
 export function link(root = pluginRoot()) {
   const bridge = bridgePath(root);
   const cur = read() || "";
@@ -103,8 +112,7 @@ export function link(root = pluginRoot()) {
     return {
       action: "conflict",
       error:
-        `В ${CONFIG_PATH} уже есть таблица [${SERVER_TABLE}], объявленная не этим плагином. ` +
-        `Добавление второй сделало бы файл невалидным TOML. Удалите или переименуйте существующую таблицу и повторите.`,
+        message("linkback_conflict", CONFIG_PATH, SERVER_TABLE),
     };
   }
 
@@ -133,8 +141,9 @@ export function ensureFresh(root = pluginRoot()) {
   if (!isLinked()) return null;
   const want = bridgePath(root);
   const have = linkedPath();
-  if (have === want) return null;
+  const pathChanged = have !== want;
+  if (!pathChanged && hasCurrentLanguage()) return null;
   if (!fs.existsSync(want)) return null;
   const r = link(root);
-  return r.action === "conflict" ? null : { from: have, to: want };
+  return r.action === "conflict" || !pathChanged ? null : { from: have, to: want };
 }

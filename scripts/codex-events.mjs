@@ -7,6 +7,11 @@
 // Формат событий менялся между версиями Codex, поэтому разбор терпимый:
 // неизвестные типы игнорируются, отсутствующие поля не роняют.
 
+import { trailText } from "./i18n.mjs";
+
+// Подписи ленты берутся на каждый вызов: язык задаётся окружением процесса.
+const L = trailText;
+
 /** Одна строка JSONL → событие, или null если строка не событие. */
 export function parseLine(line) {
   const t = String(line).trim();
@@ -72,7 +77,7 @@ const DETAIL_MAX = 4000;
 const detailOf = (s) => {
   const t = String(s || "").trim();
   if (!t) return null;
-  return t.length > DETAIL_MAX ? `${t.slice(0, DETAIL_MAX)}\n[… обрезано]` : t;
+  return t.length > DETAIL_MAX ? `${t.slice(0, DETAIL_MAX)}\n${L().truncated}` : t;
 };
 
 const cmdOf = (it) => String(it.command || "").replace(/^bash -lc\s*/, "");
@@ -92,30 +97,30 @@ export function normalize(e) {
 
   if (e.type === "thread.started") {
     const id = e.thread_id || e.thread?.id || null;
-    return at({ kind: "status", title: "сессия открыта", detail: id, threadId: id });
+    return at({ kind: "status", title: L().session_open, detail: id, threadId: id });
   }
-  if (e.type === "turn.started") return at({ kind: "status", title: "начал обдумывать задачу", detail: null });
+  if (e.type === "turn.started") return at({ kind: "status", title: L().turn_started, detail: null });
   if (e.type === "turn.completed") {
     const u = e.usage || {};
     const bits = [
-      u.input_tokens && `вход ${u.input_tokens}`,
-      u.output_tokens && `выход ${u.output_tokens}`,
-      u.reasoning_output_tokens && `размышления ${u.reasoning_output_tokens}`,
+      u.input_tokens && L().tokens_in(u.input_tokens),
+      u.output_tokens && L().tokens_out(u.output_tokens),
+      u.reasoning_output_tokens && L().tokens_reasoning(u.reasoning_output_tokens),
     ]
       .filter(Boolean)
       .join(", ");
-    return at({ kind: "status", title: `завершил${bits ? ` (${bits} токенов)` : ""}`, detail: null, usage: u });
+    return at({ kind: "status", title: L().done(bits), detail: null, usage: u });
   }
   if (e.type === "turn.failed") {
-    const msg = e.error?.message || e.message || "без описания";
-    return at({ kind: "error", title: `сбой: ${clip(msg, 200)}`, detail: detailOf(msg), fatal: true });
+    const msg = e.error?.message || e.message || L().no_detail;
+    return at({ kind: "error", title: L().failure(clip(msg, 200)), detail: detailOf(msg), fatal: true });
   }
   if (e.type === "error") {
     const msg = e.message || e.error?.message || "";
     const transient = /reconnect/i.test(msg);
     return at({
       kind: transient ? "status" : "error",
-      title: transient ? `переподключение (${clip(msg, 40)})` : `ошибка: ${clip(msg, 200)}`,
+      title: transient ? L().reconnecting(clip(msg, 40)) : L().error(clip(msg, 200)),
       detail: detailOf(msg),
       fatal: !transient,
     });
@@ -134,16 +139,16 @@ export function normalize(e) {
       if (!textRaw) return null;
       // Сводка reasoning — самая ценная часть ленты, поэтому в detail она
       // уходит целиком: раньше от неё оставались первые 100 символов.
-      return at({ kind: "reasoning", title: `размышляет: ${clip(firstLine(textRaw), 120)}`, detail: detailOf(textRaw) });
+      return at({ kind: "reasoning", title: L().reasoning(clip(firstLine(textRaw), 120)), detail: detailOf(textRaw) });
     }
     case "command_execution": {
       const cmd = cmdOf(it);
-      if (started) return at({ kind: "command", title: `запускает: ${clip(cmd, 80)}`, detail: detailOf(cmd) });
+      if (started) return at({ kind: "command", title: L().running(clip(cmd, 80)), detail: detailOf(cmd) });
       const code = it.exit_code;
       const bad = !(code === 0 || code === undefined || code === null);
       return at({
         kind: "command",
-        title: `выполнил: ${clip(cmd, 80)}${bad ? ` (код ${code})` : ""}`,
+        title: L().ran(clip(cmd, 80), bad ? code : null),
         detail: detailOf(it.aggregated_output || it.output || cmd),
         exitCode: code ?? null,
       });
@@ -153,7 +158,7 @@ export function normalize(e) {
       const files = changes.map((c) => c.path || c.file).filter(Boolean);
       return at({
         kind: "file",
-        title: files.length ? `правит файлы: ${clip(files.join(", "), 120)}` : "правит файлы",
+        title: L().editing_files(files.length ? clip(files.join(", "), 120) : ""),
         detail: detailOf(changes.map((c) => `${c.kind || "change"} ${c.path || c.file || "?"}`).join("\n")),
         files,
       });
@@ -162,7 +167,7 @@ export function normalize(e) {
       const name = `${it.server ? `${it.server}/` : ""}${it.tool || it.name || "?"}`;
       return at({
         kind: "mcp",
-        title: `${started ? "вызывает" : "вызвал"} инструмент: ${name}`,
+        title: L().tool_call(started, name),
         // Аргументы и результат чужого инструмента могут содержать секреты и
         // мегабайты вывода — наружу отдаём только имя и признак ошибки.
         detail: it.error ? detailOf(String(it.error?.message || it.error)) : null,
@@ -170,36 +175,36 @@ export function normalize(e) {
       });
     }
     case "web_search":
-      return at({ kind: "web", title: `ищет в вебе: ${clip(it.query || "", 80)}`, detail: detailOf(it.query) });
+      return at({ kind: "web", title: L().web_search(clip(it.query || "", 80)), detail: detailOf(it.query) });
     case "todo_list": {
       const items = it.items || it.todos || [];
       if (!items.length) return null;
       const doneCount = items.filter((x) => x.completed || x.status === "completed").length;
       return at({
         kind: "todo",
-        title: `план: ${doneCount}/${items.length} выполнено`,
+        title: L().plan(doneCount, items.length),
         detail: detailOf(
           items.map((x) => `${x.completed || x.status === "completed" ? "[x]" : "[ ]"} ${x.text || x.title || ""}`).join("\n")
         ),
       });
     }
     case "collab_tool_call": {
-      const name = it.tool || it.name || it.agent || "субагент";
-      return at({ kind: "mcp", title: `${started ? "передаёт" : "получил от"} субагента: ${name}`, detail: null });
+      const name = it.tool || it.name || it.agent || L().subagent_default;
+      return at({ kind: "mcp", title: L().subagent(started, name), detail: null });
     }
     case "agent_message": {
-      if (started) return at({ kind: "status", title: "формулирует ответ", detail: null });
+      if (started) return at({ kind: "status", title: L().composing, detail: null });
       const textRaw = String(it.text || "").trim();
       if (!textRaw) return null;
       // Промежуточные сообщения — это реплики по ходу работы; какое из них
       // финальное, знает только конец потока (см. finalMessage).
-      return at({ kind: "message", title: `говорит: ${clip(firstLine(textRaw), 120)}`, detail: detailOf(textRaw) });
+      return at({ kind: "message", title: L().says(clip(firstLine(textRaw), 120)), detail: detailOf(textRaw) });
     }
     case "error": {
       const msg = String(it.message || it.text || "").trim();
       if (!msg) return null;
       // item-ошибка нефатальна: turn при этом продолжается
-      return at({ kind: "error", title: `предупреждение: ${clip(msg, 160)}`, detail: detailOf(msg), fatal: false });
+      return at({ kind: "error", title: L().warning(clip(msg, 160)), detail: detailOf(msg), fatal: false });
     }
     default:
       return started && kind ? at({ kind: "status", title: String(kind), detail: null }) : null;

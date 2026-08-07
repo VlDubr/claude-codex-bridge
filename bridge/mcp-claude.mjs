@@ -14,6 +14,7 @@ import { serve, text, fail } from "../scripts/mcp-lib.mjs";
 import { pluginVersion } from "../scripts/version.mjs";
 import { killTree, isWindows } from "../scripts/proc.mjs";
 import { ToolProxy, readExposed } from "./tool-proxy.mjs";
+import { toolText, prompt as claudePrompt, message } from "./i18n-claude.mjs";
 
 const cleanEnv = (n) => {
   const v = process.env[n];
@@ -60,7 +61,8 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
   if (denyTools?.length) args.push("--disallowedTools", denyTools.join(","));
 
   return new Promise((resolve) => {
-    if (signal?.aborted) return resolve({ ok: false, aborted: true, error: "Вызов отменён до запуска Claude." });
+    if (signal?.aborted)
+      return resolve({ ok: false, aborted: true, error: message("cancelled_before_start") });
 
     let child;
     try {
@@ -99,7 +101,7 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
 
     function onAbort() {
       killTree(child.pid);
-      settle({ ok: false, aborted: true, error: "Вызов отменён, Claude остановлен." });
+      settle({ ok: false, aborted: true, error: message("cancelled") });
     }
     signal?.addEventListener?.("abort", onAbort, { once: true });
 
@@ -107,7 +109,7 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
       killTree(child.pid);
       settle({
         ok: false,
-        error: `Claude напечатал в ${stream} больше ${Math.round(MAX_OUTPUT_BYTES / 1024 / 1024)} МБ — вывод не принят, процесс остановлен.`,
+        error: message("output_overflow", stream, Math.round(MAX_OUTPUT_BYTES / 1024 / 1024)),
       });
     };
 
@@ -126,7 +128,7 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
       running.delete(child);
       settle(
         e?.code === "ENOENT"
-          ? { ok: false, error: "Бинарь claude не найден в PATH." }
+          ? { ok: false, error: message("claude_not_found") }
           : { ok: false, error: String(e?.message || e) }
       );
     });
@@ -134,7 +136,7 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         killTree(child.pid);
-        settle({ ok: false, error: "Claude не ответил за отведённое время." });
+        settle({ ok: false, error: message("timeout") });
       }, timeoutMs);
     }
 
@@ -153,12 +155,12 @@ function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs =
         return settle({
           ok: false,
           error:
-            `Claude завершился с кодом ${code === null ? `сигналом ${sig}` : code}.` +
+            message("exit", code, sig) +
             (errText ? `\n${errText.slice(0, 800)}` : "") +
-            (out ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
+            (out ? `\n\n${message("partial_output", out.slice(0, 800))}` : ""),
         });
       }
-      if (!out) return settle({ ok: false, error: errText || "Claude вернул пустой ответ." });
+      if (!out) return settle({ ok: false, error: errText || message("empty_response") });
       settle({ ok: true, output: out });
     });
   });
@@ -180,9 +182,7 @@ function resolveTools(requested, configured, write) {
       // Пустое пересечение — не повод молча запустить Claude без инструментов:
       // это запрос за пределы allowlist, и об этом надо сказать.
       return {
-        error:
-          `Запрошенные инструменты [${asked.join(", ")}] не входят в разрешённый набор ` +
-          `[${admin.join(", ")}]. Набор задаётся администратором через /codex-bridge:setup --task-tools и расширению не подлежит.`,
+        error: message("tools_not_allowed", asked, admin),
       };
     }
   }
@@ -193,9 +193,7 @@ function resolveTools(requested, configured, write) {
     tools = (tools || ["Read", "Grep", "Glob"]).filter((t) => !deny.has(t.split("(")[0]));
     if (!tools.length) {
       return {
-        error:
-          `После исключения инструментов записи (${WRITE_TOOLS.join(", ")}) не осталось ни одного ` +
-          `доступного инструмента из [${(before || []).join(", ")}]. Передай write: true, если нужна правка файлов.`,
+        error: message("no_tools_after_write_filter", WRITE_TOOLS, before),
       };
     }
   }
@@ -204,30 +202,30 @@ function resolveTools(requested, configured, write) {
 
 // ------------------------------------------------------------- свои инструменты
 
+const tx = toolText();
+
 const OWN_TOOLS = [
   {
     name: "claude_ask",
-    description:
-      "Спросить мнение у Claude — второй модели, работающей над тем же репозиторием. Используй, когда нужен независимый взгляд на решение, разбор незнакомого кода или контраргумент. Claude отвечает текстом и ничего не меняет.",
+    description: tx.ask_d,
     inputSchema: {
       type: "object",
       properties: {
-        question: { type: "string", description: "Вопрос, сформулированный самодостаточно." },
-        context: { type: "string", description: "Твой текущий контекст и предлагаемое решение." },
-        model: { type: "string", description: "opus, sonnet, haiku или полное имя. По умолчанию sonnet." },
+        question: { type: "string", description: tx.ask_question },
+        context: { type: "string", description: tx.ask_context },
+        model: { type: "string", description: tx.ask_model },
       },
       required: ["question"],
     },
   },
   {
     name: "claude_critique",
-    description:
-      "Попросить Claude раскритиковать твой план или патч до применения. Вернёт список возражений и рисков.",
+    description: tx.critique_d,
     inputSchema: {
       type: "object",
       properties: {
-        proposal: { type: "string", description: "План или диф, который надо раскритиковать." },
-        model: { type: "string" },
+        proposal: { type: "string", description: tx.critique_proposal },
+        model: { type: "string", description: tx.critique_model },
       },
       required: ["proposal"],
     },
@@ -236,27 +234,25 @@ const OWN_TOOLS = [
 
 const TASK_TOOL = {
   name: "claude_task",
-  description:
-    "Делегировать задачу Claude Code, у которого есть собственные инструменты: чтение и правка файлов, поиск по репозиторию, запуск команд, подключённые MCP-серверы. Используй, когда задача требует возможностей, которых нет у тебя, либо когда нужен второй исполнитель. Claude вернёт отчёт о сделанном.",
+  description: tx.task_d,
   inputSchema: {
     type: "object",
     properties: {
       task: {
         type: "string",
-        description: "Самодостаточное описание задачи: что сделать, где, чем считается готово.",
+        description: tx.task_task,
       },
       allowed_tools: {
         type: "array",
         items: { type: "string" },
-        description:
-          "Сузить набор инструментов Claude, напр. [\"Read\",\"Grep\"]. Может только сужать: итоговый набор — пересечение с allowlist из настроек моста.",
+        description: tx.task_allowed_tools,
       },
       write: {
         type: "boolean",
         default: false,
-        description: "Разрешить Claude изменять файлы. По умолчанию только чтение.",
+        description: tx.task_write,
       },
-      model: { type: "string" },
+      model: { type: "string", description: tx.task_model },
     },
     required: ["task"],
   },
@@ -270,7 +266,7 @@ if (Object.keys(cfg.servers).length) await proxy.start();
 const TOOLS = [...OWN_TOOLS, ...(cfg.allowTask ? [TASK_TOOL] : []), ...proxy.toolDescriptors()];
 
 if (proxy.errors.length) {
-  process.stderr.write(`[codex-bridge] проброс инструментов:\n  ${proxy.errors.join("\n  ")}\n`);
+  process.stderr.write(message("proxy_errors", proxy.errors));
 }
 
 // ------------------------------------------------------------------ обработка
@@ -282,58 +278,44 @@ async function handle(name, args, ctx = {}) {
       if (res && Array.isArray(res.content)) return res; // уже формат MCP
       return text(JSON.stringify(res));
     } catch (e) {
-      return fail(`Проброшенный инструмент ${name} завершился ошибкой: ${e.message || e}`);
+      return fail(message("proxied_tool_failed", name, e.message || e));
     }
   }
 
   if (name === "claude_ask") {
-    const prompt = `К тебе обращается GPT (Codex), работающий над задачей в этом же репозитории. Ему нужно твоё независимое мнение.
-
-${args.context ? `КОНТЕКСТ ОТ GPT:\n${args.context}\n\n` : ""}ВОПРОС:
-${args.question}
-
-Ответь по существу и сжато. Если не согласен с посылкой вопроса — скажи прямо. Обозначь степень уверенности там, где её нет.`;
-    const r = await runClaude(prompt, { model: args.model, signal: ctx.signal });
-    return r.ok ? text(`Ответ Claude:\n\n${r.output}`) : fail(r.error);
+    const r = await runClaude(claudePrompt("ask", args.question, args.context), {
+      model: args.model,
+      signal: ctx.signal,
+    });
+    return r.ok ? text(message("answer", r.output)) : fail(r.error);
   }
 
   if (name === "claude_critique") {
-    const prompt = `GPT (Codex) предлагает следующее решение и просит раскритиковать его до применения.
-
-ПРЕДЛОЖЕНИЕ:
-${args.proposal}
-
-Дай список конкретных возражений: что может сломаться, какие допущения не проверены, что упущено. Если возражений нет — скажи, но назови условия, при которых решение перестанет работать. Не переписывай решение целиком, критикуй.`;
-    const r = await runClaude(prompt, { model: args.model, signal: ctx.signal });
-    return r.ok ? text(`Ответ Claude:\n\n${r.output}`) : fail(r.error);
+    const r = await runClaude(claudePrompt("critique", args.proposal), {
+      model: args.model,
+      signal: ctx.signal,
+    });
+    return r.ok ? text(message("answer", r.output)) : fail(r.error);
   }
 
   if (name === "claude_task") {
-    if (!cfg.allowTask) return fail("claude_task выключен. Включить: /codex-bridge:setup --allow-task");
+    if (!cfg.allowTask) return fail(message("task_disabled"));
     const write = args.write === true;
     const resolved = resolveTools(args.allowed_tools, cfg.taskTools, write);
     if (resolved.error) return fail(resolved.error);
     const tools = resolved.tools;
     const denyTools = write ? [] : WRITE_TOOLS;
-    const prompt = `Тебе делегирована задача от GPT (Codex), работающего в этом же репозитории.
-
-ЗАДАЧА:
-${args.task}
-
-${write ? "Ты можешь изменять файлы." : "Работай только на чтение: ничего не меняй, верни результат текстом."}
-
-В конце дай сводку: что сделал, какие файлы затронул, чем проверил, что осталось незакрытым.`;
-    const r = await runClaude(prompt, {
+    const r = await runClaude(claudePrompt("task", args.task, write), {
       model: args.model,
       tools,
       denyTools,
       mode: write ? "acceptEdits" : "plan",
       signal: ctx.signal,
     });
-    return r.ok ? text(`Claude отчитался:\n\n${r.output}`) : fail(r.error);
+    return r.ok ? text(message("report", r.output)) : fail(r.error);
   }
 
-  return fail(`Неизвестный инструмент: ${name}`);
+  return fail(message("unknown_tool", name));
 }
 
 // Мост уходит — Claude уходит с ним. Иначе закрытие Codex оставляет позади

@@ -266,6 +266,401 @@ export function toolText() {
   return { ...TOOLS.en, ...(TOOLS[lang()] || {}) };
 }
 
+// Лента хода работы: короткие глаголы, которыми описывается каждый шаг модели.
+const TRAIL = {
+  en: {
+    session_open: "session opened",
+    turn_started: "started thinking",
+    done: (bits) => `finished${bits ? ` (${bits} tokens)` : ""}`,
+    tokens_in: (n) => `in ${n}`,
+    tokens_out: (n) => `out ${n}`,
+    tokens_reasoning: (n) => `reasoning ${n}`,
+    no_detail: "no details",
+    failure: (m) => `failure: ${m}`,
+    reconnecting: (m) => `reconnecting (${m})`,
+    error: (m) => `error: ${m}`,
+    warning: (m) => `warning: ${m}`,
+    reasoning: (m) => `thinking: ${m}`,
+    running: (c) => `running: ${c}`,
+    ran: (c, code) => `ran: ${c}${code === null ? "" : ` (exit ${code})`}`,
+    editing_files: (f) => (f ? `editing files: ${f}` : "editing files"),
+    tool_call: (started, name) => `${started ? "calling" : "called"} tool: ${name}`,
+    web_search: (q) => `searching the web: ${q}`,
+    plan: (done, total) => `plan: ${done}/${total} done`,
+    subagent: (started, name) => `${started ? "handing to" : "got back from"} subagent: ${name}`,
+    subagent_default: "subagent",
+    composing: "composing the answer",
+    says: (m) => `says: ${m}`,
+    truncated: "[… truncated]",
+  },
+  ru: {
+    session_open: "сессия открыта",
+    turn_started: "начал обдумывать задачу",
+    done: (bits) => `завершил${bits ? ` (${bits} токенов)` : ""}`,
+    tokens_in: (n) => `вход ${n}`,
+    tokens_out: (n) => `выход ${n}`,
+    tokens_reasoning: (n) => `размышления ${n}`,
+    no_detail: "без описания",
+    failure: (m) => `сбой: ${m}`,
+    reconnecting: (m) => `переподключение (${m})`,
+    error: (m) => `ошибка: ${m}`,
+    warning: (m) => `предупреждение: ${m}`,
+    reasoning: (m) => `размышляет: ${m}`,
+    running: (c) => `запускает: ${c}`,
+    ran: (c, code) => `выполнил: ${c}${code === null ? "" : ` (код ${code})`}`,
+    editing_files: (f) => (f ? `правит файлы: ${f}` : "правит файлы"),
+    tool_call: (started, name) => `${started ? "вызывает" : "вызвал"} инструмент: ${name}`,
+    web_search: (q) => `ищет в вебе: ${q}`,
+    plan: (done, total) => `план: ${done}/${total} выполнено`,
+    subagent: (started, name) => `${started ? "передаёт" : "получил от"} субагента: ${name}`,
+    subagent_default: "субагент",
+    composing: "формулирует ответ",
+    says: (m) => `говорит: ${m}`,
+    truncated: "[… обрезано]",
+  },
+};
+
+/** Подписи ленты хода работы на текущем языке. */
+export function trailText() {
+  return { ...TRAIL.en, ...(TRAIL[lang()] || {}) };
+}
+
+// Ответы и отказы инструментов основного сервера.
+const UI = {
+  en: {
+    not_installed: "Codex CLI not found. Install it: npm install -g @openai/codex — then run codex login.",
+    not_logged_in: "Codex is installed but not authorised. Run in a terminal: codex login (OAuth sign-in with a ChatGPT account).",
+    probe_timeout: "The Codex readiness check did not finish in time. Codex itself may well be fine. Check by hand: codex login status.",
+
+    job_finished_ago: (age) => `${age} ago, finished`,
+    job_running_for: (age) => `running for ${age}`,
+    trail_truncated: "  · […trail truncated, full log via codex_progress]",
+    trail_header: "GPT progress (summaries, not full reasoning):",
+    answer_header: "GPT answer:",
+
+    effort_hint: (bad) => `${bad}\nFull list — the codex_models tool.`,
+    unknown_model: (model, available) =>
+      `Model "${model}" is not in the Codex catalogue.\nAvailable: ${available}\nFull list with descriptions — the codex_models tool.`,
+
+    cancelled: (id) => `Call cancelled, task ${id} stopped.`,
+    cancelled_chat: (id, slug) => `Call cancelled, task ${id} stopped. Thread "${slug}" left unchanged.`,
+    timed_out: (sec, id) => `GPT did not finish within ${sec}s — the very same work continues in the background: ${id}`,
+    follow_answer: "Follow the progress: codex_progress. Collect the answer: codex_result.",
+    follow_result: "Follow the progress: codex_progress. Collect the result: codex_result.",
+
+    need_message: "The message field is required.",
+    need_task: "The task field is required.",
+    bad_chat_name: (slug) => `Invalid chat name: ${slug}. Latin letters, digits, dot and hyphen are allowed.`,
+    chat_timed_out: (sec, id, slug) =>
+      `The model did not finish within ${sec}s — the work continues in the background: ${id}\n` +
+      `The answer will land in thread "${slug}" — collect it with codex_result, then carry on with the conversation.`,
+    chat_thread_lost: (slug, threadId, error) =>
+      `Thread "${slug}" (${threadId}) could not be resumed — Codex did not find it.\n` +
+      `The session may have been deleted, or it was recorded under a different CODEX_HOME.\n` +
+      `Forget the conversation (codex_chats with forget: "${slug}") and start over.\n\n${error}`,
+    chat_head: (slug, model, turn, noThread) =>
+      `Chat "${slug}"${model ? ` · ${model}` : ""} · turn ${turn}` +
+      (noThread ? "\n(thread not saved: Codex reported no session id — the next turn will start the conversation over)" : ""),
+    chat_forgotten: (slug) => `Conversation "${slug}" forgotten. The next message will start a new thread.`,
+    chat_not_found: (slug) => `Conversation "${slug}" not found.`,
+    no_chats: "No conversations with Codex models yet.",
+    chat_line: (slug, model, effort, turns, age, noThread, cwd) =>
+      `${slug}${model ? ` · ${model}` : ""}${effort ? ` · ${effort}` : ""} — ${turns} turns, ` +
+      `updated ${age} ago${noThread ? " (thread not saved)" : ""}\n    ${cwd}`,
+
+    prefs_cleared: "Reset. The plugin settings apply from now on.",
+    prefs_current: (model, effort) =>
+      `For this repository: model ${model}, effort ${effort}.\n` +
+      `This is a per-project value, not a per-window one: an MCP call has no reliable session identifier.`,
+    prefs_set: (model, effort, repo) =>
+      `Defaults from now on: model ${model}, effort ${effort}.\nApplies to repository ${repo}, not just to this Claude window.`,
+    from_settings: "(from plugin settings)",
+
+    job_not_found: "Task not found. The list — codex_status.",
+    job_not_found_id: (id) => `Task ${id} not found.`,
+    no_jobs: "No background Codex tasks in this repository.",
+    no_events_yet: (id, status, age) =>
+      `${id} [${status}] — no events yet (${age} since start).\n` +
+      `If Codex runs without --json support the trail is unavailable; use codex_result once it finishes.`,
+    progress_head: (id, status, age) => `${id} [${status}], running for ${age}`,
+    progress_finished: "\n\nWork finished — collect the result with codex_result.",
+    still_running: (id, age) => `${id} is still running (${age}).`,
+    trail_section: "--- progress ---",
+    empty_output: "(output empty)",
+    empty_so_far: "(nothing yet)",
+
+    diff_failed: (reason) => `Could not collect the changes for review: ${reason}`,
+    review_timed_out: (id) => `Did not finish within 8 minutes — the work continues in the background: ${id}`,
+    review_started: (adversarial, id) =>
+      `Started ${adversarial ? "adversarial review" : "review"} in the background: ${id}\n` +
+      `Follow it: codex_progress. Collect the result: codex_result.`,
+    delegated: (id) => `Task delegated to GPT: ${id}\nGPT works in the working directory and may change files. Follow it: codex_progress.`,
+    cancelled_note: "cancelled.",
+    unknown_tool: (name) => `Unknown tool: ${name}`,
+    age_seconds: (n) => `${n}s`,
+    age_minutes: (n) => `${n}m`,
+    age_hours: (n) => `${n}h`,
+  },
+
+  ru: {
+    not_installed: "Codex CLI не найден. Установи: npm install -g @openai/codex — затем codex login.",
+    not_logged_in: "Codex установлен, но не авторизован. Выполни в терминале: codex login (вход через ChatGPT-аккаунт по OAuth).",
+    probe_timeout: "Проверка готовности Codex не завершилась за отведённое время. Сам Codex при этом может быть исправен. Проверь вручную: codex login status.",
+
+    job_finished_ago: (age) => `${age} назад, завершена`,
+    job_running_for: (age) => `идёт ${age}`,
+    trail_truncated: "  · […лента обрезана, полный журнал — codex_progress]",
+    trail_header: "Ход работы GPT (сводки, не полные рассуждения):",
+    answer_header: "Ответ GPT:",
+
+    effort_hint: (bad) => `${bad}\nПолный список — инструмент codex_models.`,
+    unknown_model: (model, available) =>
+      `Модель "${model}" отсутствует в каталоге Codex.\nДоступны: ${available}\nПолный список с описаниями — инструмент codex_models.`,
+
+    cancelled: (id) => `Вызов отменён, задача ${id} остановлена.`,
+    cancelled_chat: (id, slug) => `Вызов отменён, задача ${id} остановлена. Тред "${slug}" не изменён.`,
+    timed_out: (sec, id) => `GPT не уложился в ${sec}с — та же работа продолжается в фоне: ${id}`,
+    follow_answer: "Смотри ход работы: codex_progress. Забрать ответ: codex_result.",
+    follow_result: "Смотри ход работы: codex_progress. Забрать результат: codex_result.",
+
+    need_message: "Нужно поле message.",
+    need_task: "Нужно поле task.",
+    bad_chat_name: (slug) => `Недопустимое имя чата: ${slug}. Разрешены латиница, цифры, точка, дефис.`,
+    chat_timed_out: (sec, id, slug) =>
+      `Модель не уложилась в ${sec}с — работа продолжается в фоне: ${id}\n` +
+      `Ответ придёт в тред "${slug}" — забери его через codex_result, потом продолжай разговор.`,
+    chat_thread_lost: (slug, threadId, error) =>
+      `Тред "${slug}" (${threadId}) не удалось продолжить — Codex его не нашёл.\n` +
+      `Сессия могла быть удалена или запись велась с другим CODEX_HOME.\n` +
+      `Забудь разговор (codex_chats с forget: "${slug}") и начни заново.\n\n${error}`,
+    chat_head: (slug, model, turn, noThread) =>
+      `Чат "${slug}"${model ? ` · ${model}` : ""} · ход ${turn}` +
+      (noThread ? "\n(тред не сохранён: Codex не сообщил id сессии — следующий ход начнёт разговор заново)" : ""),
+    chat_forgotten: (slug) => `Разговор "${slug}" забыт. Следующее сообщение начнёт новый тред.`,
+    chat_not_found: (slug) => `Разговор "${slug}" не найден.`,
+    no_chats: "Разговоров с моделями Codex пока нет.",
+    chat_line: (slug, model, effort, turns, age, noThread, cwd) =>
+      `${slug}${model ? ` · ${model}` : ""}${effort ? ` · ${effort}` : ""} — ходов ${turns}, ` +
+      `обновлён ${age} назад${noThread ? " (тред не сохранён)" : ""}\n    ${cwd}`,
+
+    prefs_cleared: "Сброшено. Дальше действуют значения из настроек плагина.",
+    prefs_current: (model, effort) =>
+      `Для этого репозитория: модель ${model}, effort ${effort}.\n` +
+      `Это значение проекта, а не конкретного окна Claude: надёжного идентификатора сессии у MCP-вызова нет.`,
+    prefs_set: (model, effort, repo) =>
+      `Дальше по умолчанию: модель ${model}, effort ${effort}.\nДействует для репозитория ${repo}, а не только для этого окна Claude.`,
+    from_settings: "(из настроек плагина)",
+
+    job_not_found: "Задача не найдена. Список — codex_status.",
+    job_not_found_id: (id) => `Задача ${id} не найдена.`,
+    no_jobs: "Фоновых задач Codex в этом репозитории нет.",
+    no_events_yet: (id, status, age) =>
+      `${id} [${status}] — событий пока нет (${age} с запуска).\n` +
+      `Если Codex запущен без поддержки --json, лента недоступна; используй codex_result по завершении.`,
+    progress_head: (id, status, age) => `${id} [${status}], идёт ${age}`,
+    progress_finished: "\n\nРабота завершена — забери результат через codex_result.",
+    still_running: (id, age) => `${id} ещё выполняется (${age}).`,
+    trail_section: "--- ход работы ---",
+    empty_output: "(вывод пуст)",
+    empty_so_far: "(пока пусто)",
+
+    diff_failed: (reason) => `Не удалось собрать изменения для ревью: ${reason}`,
+    review_timed_out: (id) => `Не уложилось в 8 минут — работа продолжается в фоне: ${id}`,
+    review_started: (adversarial, id) =>
+      `Запущено ${adversarial ? "состязательное ревью" : "ревью"} в фоне: ${id}\n` +
+      `Следить: codex_progress. Забрать результат: codex_result.`,
+    delegated: (id) => `Задача делегирована GPT: ${id}\nGPT работает в рабочей директории и может менять файлы. Следить: codex_progress.`,
+    cancelled_note: "отменена.",
+    unknown_tool: (name) => `Неизвестный инструмент: ${name}`,
+    age_seconds: (n) => `${n}с`,
+    age_minutes: (n) => `${n}м`,
+    age_hours: (n) => `${n}ч`,
+  },
+};
+
+/** Ответы и отказы инструментов на текущем языке. */
+export function uiText() {
+  return { ...UI.en, ...(UI[lang()] || {}) };
+}
+
+// Ядро: сбор контекста ревью, менеджер задач, разбор отказов Codex.
+const CORE = {
+  en: {
+    bad_job_id: (id) => `Invalid task identifier: ${id}`,
+    job_path_escape: (id) => `Task path escaped its directory: ${id}`,
+    job_not_found: (id) => `Task ${id} not found.`,
+    job_not_found_plain: "Task not found.",
+    already_status: (status) => `Already in status ${status}.`,
+    job_still_running: "The task is still running.",
+
+    git_not_started: (cmd, reason) => `git ${cmd} failed to start: ${reason}`,
+    git_failed: (cmd, code, stderr) => `git ${cmd} exited with code ${code}: ${stderr}`,
+    git_no_output: "no output",
+    git_diff_failed: (reason) => `git diff did not run: ${reason}`,
+    ref_not_commit: (ref) => `Reference ${ref} does not resolve to a commit in this repository.`,
+    not_a_repo: "This is not a git repository — there is nothing to review.",
+    clean_tree_no_base: "The working tree is clean and no default branch was found. Name the base explicitly.",
+
+    untracked_unreadable: (rel) => `${rel} — unreadable`,
+    untracked_symlink: (rel, target) => `${rel} — symbolic link to ${target}`,
+    untracked_directory: (rel) => `${rel} — directory`,
+    untracked_not_regular: (rel) => `${rel} — not a regular file`,
+    untracked_secret: (rel) => `${rel} — looks like a secret, contents withheld`,
+    untracked_too_big: (rel, size, limit) => `${rel} — ${size} B, over the ${limit} B limit`,
+    untracked_over_total: (rel) => `${rel} — did not fit the overall limit`,
+    untracked_binary: (rel) => `${rel} — binary`,
+    untracked_more: (n, limit) => `… and ${n} more files over the limit of ${limit}`,
+    untracked_listed_only: "Listed by name only",
+
+    no_changes: "(no changes)",
+    empty_section: "(empty)",
+    patch_too_big: (range, shortstat, fileCount, names) =>
+      `The patch is too large to include in full, and truncating it midway is not an option — ` +
+      `a truncated patch looks complete. Read the parts you need yourself, read-only: \`git diff ${range}\`.` +
+      `\n\nSummary: ${shortstat}\nFiles changed: ${fileCount}\n\n${names}`,
+    none: "none",
+
+    sec_reviewing: "Under review",
+    sec_branch_commits: "Branch commits",
+    sec_committed: "Changes in commits",
+    sec_not_committed: "Not committed yet",
+    sec_new_files: "New files",
+    no_commits: "(no commits)",
+    clean_worktree: "(working tree is clean)",
+    working_tree_only: "Uncommitted changes in the working tree.",
+    branch_head: (branch, base, mergeBase) =>
+      `Branch ${branch} against ${base} (merge base ${mergeBase}).\n` +
+      `Two parts follow: what is committed on the branch and what is not committed yet. ` +
+      `The first goes into the PR, the second does not.`,
+
+    start_lock_busy: "Task startup is held by another call longer than usual. Retry in a few seconds.",
+    limit_reached: (live, limit, list) =>
+      `${live} tasks are already running against a limit of ${limit}. Wait for them or drop the extra ones with codex_cancel:\n${list}`,
+
+    note_timeout: "The task was stopped on timeout.",
+    note_cancelled: "The task was cancelled.",
+    note_spawn_failed: "Codex did not start: check the installation (npm install -g @openai/codex).",
+    note_vanished: "The process disappeared without writing an exit code. The result is not trustworthy.",
+    worker_spawn_failed: (reason) => `failed to start the worker: ${reason}`,
+
+    codex_exit: (status, code) => `Codex ended with status ${status}${code === null ? "" : ` (code ${code})`}.`,
+    trail_label: "Progress:",
+    partial_output: (out) => `Partial output (do not treat as the result):\n${out}`,
+
+    effort_unsupported: (model, effort, supported) =>
+      `Model ${model} does not accept effort level "${effort}".` +
+      (supported ? ` Supported: ${supported}.` : "") +
+      ` Set another level via the effort argument or the plugin's default_effort setting.`,
+    sandbox_windows: (bin) =>
+      `The Windows sandbox did not start: Codex could not find its helper binary${bin}. ` +
+      `This is not an MCP server failure and not a user cancellation — the bridge is fine.\n` +
+      `The usual cause is a Codex installation assembled from different versions (CLI of one version, ` +
+      `helpers in ~/.codex/.sandbox-bin of another).\n` +
+      `What to do: reinstall Codex entirely (npm install -g @openai/codex) — that fixes the cause; ` +
+      `or, as a temporary workaround, turn on the plugin's bypass_sandbox setting, ` +
+      `but then Codex runs commands without isolation. Diagnostics: /codex-bridge:setup`,
+    mcp_cancelled:
+      "Codex reported a cancelled tool call. If you cancelled nothing, the most likely cause is a Codex sandbox failure, " +
+      "which surfaces exactly like this. Check with: /codex-bridge:setup",
+    not_authorized: "Codex is not authorised, or the session expired. Run in a terminal: codex login",
+    quota: "The ChatGPT subscription limit is reached. Wait for the quota to reset or switch to a cheaper model.",
+    unknown_flag: (flag) =>
+      `This Codex build does not know the ${flag} flag. The flag-detection cache is stale — ` +
+      `it is keyed by binary version and refreshes itself, but you can clear it by hand: ` +
+      `delete exec-caps.json in the plugin data directory.`,
+  },
+
+  ru: {
+    bad_job_id: (id) => `Недопустимый идентификатор задачи: ${id}`,
+    job_path_escape: (id) => `Путь задачи вышел за пределы каталога: ${id}`,
+    job_not_found: (id) => `Задача ${id} не найдена.`,
+    job_not_found_plain: "Задача не найдена.",
+    already_status: (status) => `Уже в статусе ${status}.`,
+    job_still_running: "Задача ещё выполняется.",
+
+    git_not_started: (cmd, reason) => `git ${cmd} не запустился: ${reason}`,
+    git_failed: (cmd, code, stderr) => `git ${cmd} завершился с кодом ${code}: ${stderr}`,
+    git_no_output: "без вывода",
+    git_diff_failed: (reason) => `git diff не выполнен: ${reason}`,
+    ref_not_commit: (ref) => `Ссылка ${ref} не разрешается в коммит этого репозитория.`,
+    not_a_repo: "Это не git-репозиторий — ревьюить нечего.",
+    clean_tree_no_base: "Рабочее дерево чистое, а ветку по умолчанию найти не удалось. Укажи base явно.",
+
+    untracked_unreadable: (rel) => `${rel} — нечитаем`,
+    untracked_symlink: (rel, target) => `${rel} — символическая ссылка на ${target}`,
+    untracked_directory: (rel) => `${rel} — каталог`,
+    untracked_not_regular: (rel) => `${rel} — не обычный файл`,
+    untracked_secret: (rel) => `${rel} — похоже на секрет, содержимое не показано`,
+    untracked_too_big: (rel, size, limit) => `${rel} — ${size} Б, больше предела ${limit} Б`,
+    untracked_over_total: (rel) => `${rel} — не поместился в общий предел`,
+    untracked_binary: (rel) => `${rel} — двоичный`,
+    untracked_more: (n, limit) => `… и ещё ${n} файлов сверх предела ${limit}`,
+    untracked_listed_only: "Показаны только именами",
+
+    no_changes: "(изменений нет)",
+    empty_section: "(пусто)",
+    patch_too_big: (range, shortstat, fileCount, names) =>
+      `Патч слишком велик, чтобы вложить его целиком, и обрезать его посередине нельзя — ` +
+      `обрезанный патч выглядит полным. Прочитай нужные места сам, только на чтение: \`git diff ${range}\`.` +
+      `\n\nСводка: ${shortstat}\nФайлов изменено: ${fileCount}\n\n${names}`,
+    none: "нет",
+
+    sec_reviewing: "Ревьюется",
+    sec_branch_commits: "Коммиты ветки",
+    sec_committed: "Изменения в коммитах",
+    sec_not_committed: "Ещё не закоммичено",
+    sec_new_files: "Новые файлы",
+    no_commits: "(коммитов нет)",
+    clean_worktree: "(рабочее дерево чистое)",
+    working_tree_only: "Незакоммиченные изменения рабочего дерева.",
+    branch_head: (branch, base, mergeBase) =>
+      `Ветка ${branch} относительно ${base} (общий предок ${mergeBase}).\n` +
+      `Ниже две части: закоммиченное в ветке и то, что ещё не закоммичено. Первое уйдёт в PR, второе — нет.`,
+
+    start_lock_busy: "Запуск задачи занят другим вызовом дольше обычного. Повтори через несколько секунд.",
+    limit_reached: (live, limit, list) =>
+      `Уже выполняется ${live} задач при пределе ${limit}. Дождись их или сними лишние через codex_cancel:\n${list}`,
+
+    note_timeout: "Задача остановлена по таймауту.",
+    note_cancelled: "Задача отменена.",
+    note_spawn_failed: "Codex не запустился: проверь установку (npm install -g @openai/codex).",
+    note_vanished: "Процесс исчез, не записав код возврата. Результат недостоверен.",
+    worker_spawn_failed: (reason) => `не удалось запустить воркер: ${reason}`,
+
+    codex_exit: (status, code) => `Codex завершился со статусом ${status}${code === null ? "" : ` (код ${code})`}.`,
+    trail_label: "Ход работы:",
+    partial_output: (out) => `Частичный вывод (не считать результатом):\n${out}`,
+
+    effort_unsupported: (model, effort, supported) =>
+      `Модель ${model} не принимает уровень усилий "${effort}".` +
+      (supported ? ` Поддерживаются: ${supported}.` : "") +
+      ` Задай другой уровень аргументом effort или в настройке default_effort плагина.`,
+    sandbox_windows: (bin) =>
+      `Не запустилась песочница Windows: Codex не нашёл вспомогательный бинарь${bin}` +
+      `. Это не отказ MCP-сервера и не отмена пользователем — мост исправен.\n` +
+      `Обычная причина: установка Codex собрана из разных версий (CLI одной версии, ` +
+      `хелперы в ~/.codex/.sandbox-bin другой).\n` +
+      `Что делать: переустановить Codex целиком (npm install -g @openai/codex) — это решает причину; ` +
+      `либо, как временный обход, включить настройку плагина bypass_sandbox, ` +
+      `но тогда Codex будет выполнять команды без изоляции. Диагностика: /codex-bridge:setup`,
+    mcp_cancelled:
+      "Codex сообщил об отмене вызова инструмента. Если вы ничего не отменяли, " +
+      "наиболее вероятная причина — сбой песочницы Codex, который выходит наружу именно так. " +
+      "Проверьте: /codex-bridge:setup",
+    not_authorized: "Codex не авторизован или сессия истекла. Выполни в терминале: codex login",
+    quota: "Достигнут лимит подписки ChatGPT. Подожди сброса квоты или смени модель на более дешёвую.",
+    unknown_flag: (flag) =>
+      `Эта сборка Codex не знает флаг ${flag}. Кэш определения флагов устарел — ` +
+      `он привязан к версии бинаря и обновится сам, но можно сбросить вручную: ` +
+      `удали exec-caps.json в каталоге данных плагина.`,
+  },
+};
+
+/** Сообщения ядра на текущем языке. */
+export function coreText() {
+  return { ...CORE.en, ...(CORE[lang()] || {}) };
+}
+
 /**
  * Промпт для вызываемой модели. Английский — запасной вариант для любого
  * ключа: отсутствующий перевод не должен ронять запуск задачи.

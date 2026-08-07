@@ -219,7 +219,7 @@ console.log("ok");`,
   assert.ok(res.length >= 2, "мост не ответил");
   const call = res.find((m) => m.id === 2);
   assert.equal(call.result.isError, true, "расширение allowlist не отклонено");
-  assert.match(call.result.content[0].text, /не вход|расширению не подлежит/);
+  assert.match(call.result.content[0].text, /not in the allowed set|cannot expand it/);
   assert.ok(!fs.existsSync(argvFile), "claude был запущен, хотя запрос вне allowlist");
 });
 
@@ -406,7 +406,7 @@ await t("7c. служебные метки потоков не показыва�
   ].join("\n");
 
   const trail = ev.progressTrail(log, { limit: 10 });
-  assert.deepEqual(trail, ["сессия открыта"], `метки утекли в ленту: ${JSON.stringify(trail)}`);
+  assert.deepEqual(trail, ["session opened"], `метки утекли в ленту: ${JSON.stringify(trail)}`);
 });
 
 await t("7d. журнал прежнего формата читается по-старому", async () => {
@@ -534,7 +534,7 @@ await t("9e. отказ API по уровню усилий объясняетс�
 
   const reason = core.explainCodexFailure(clean);
   assert.ok(reason, "причина не распознана");
-  assert.match(reason, /не принимает уровень усилий "minimal"/);
+  assert.match(reason, /does not accept effort level "minimal"/);
   assert.match(reason, /low/, "не перечислены поддерживаемые значения");
 
   assert.match(core.explainCodexFailure("Error: not logged in"), /codex login/);
@@ -610,8 +610,8 @@ await t("15a. сбой песочницы распознаётся, а не вы
     "launch helper: helper=codex-windows-sandbox-setup.exe, error=program not found";
   const r = core.explainCodexFailure(real);
   assert.ok(r, "причина не распознана");
-  assert.match(r, /песочниц/i);
-  assert.match(r, /мост исправен/, "не сказано, что MCP-сервер тут ни при чём");
+  assert.match(r, /sandbox/i);
+  assert.match(r, /the bridge is fine/, "не сказано, что MCP-сервер тут ни при чём");
   assert.match(r, /npm install -g @openai\/codex/, "нет действия по починке");
 
   // Именно так сбой выходит наружу и увёл диагностику в сторону
@@ -672,7 +672,7 @@ await t("15c. рассинхрон версий Codex обнаруживаетс
 
   const r = h.inspect();
   assert.ok(r.problems.length, "рассинхрон версий не отмечен как проблема");
-  assert.match(h.format(r), /Решение:/, "нет готового действия");
+  assert.match(h.format(r), /Solution:/, "нет готового действия");
   delete process.env.CODEX_HOME;
 });
 
@@ -699,10 +699,16 @@ await t("16a. поток событий превращается в ленту �
   assert.deepEqual(ev.usageOf(events), { input_tokens: 24763, output_tokens: 122 });
 
   const trail = ev.progressTrail(JSONL);
-  assert.ok(trail.some((l) => /размышляет: Scanning docs/.test(l)), `нет рассуждений: ${trail}`);
-  assert.ok(trail.some((l) => /запускает: ls/.test(l)), `нет запуска команды: ${trail}`);
-  assert.ok(trail.some((l) => /правит файлы: src\/a\.ts/.test(l)), `нет правки файлов: ${trail}`);
-  assert.ok(trail.some((l) => /переподключение/.test(l)), "реконнект потерян");
+  assert.ok(trail.some((l) => /thinking: Scanning docs/.test(l)), `нет рассуждений: ${trail}`);
+  assert.ok(trail.some((l) => /running: ls/.test(l)), `нет запуска команды: ${trail}`);
+  assert.ok(trail.some((l) => /editing files: src\/a\.ts/.test(l)), `нет правки файлов: ${trail}`);
+  assert.ok(trail.some((l) => /reconnecting/.test(l)), "реконнект потерян");
+
+  // Та же лента по-русски: подписи переключаются вместе с языком.
+  process.env.CODEX_BRIDGE_LANG = "ru";
+  const ruTrail = ev.progressTrail(JSONL);
+  delete process.env.CODEX_BRIDGE_LANG;
+  assert.ok(ruTrail.some((l) => /размышляет: Scanning docs/.test(l)), `лента не переключилась: ${ruTrail}`);
 });
 
 await t("16b. реконнект не считается фатальной ошибкой", async () => {
@@ -1010,7 +1016,7 @@ await t("18b. отказ запуска — failed с причиной, а не 
   const r = await w.settled();
   assert.equal(r.code, 127, `ожидался 127, получен ${r.code}`);
   assert.equal(r.note, "spawn_failed");
-  assert.match(r.out, /не удалось запустить Codex/, "причина отказа не попала в журнал");
+  assert.match(r.out, /could not start Codex/, "причина отказа не попала в журнал");
 });
 
 await t("18c. таймаут воркера помечается и убивает процесс", async () => {
@@ -1019,7 +1025,7 @@ await t("18c. таймаут воркера помечается и убивае
   const r = await w.settled();
   assert.equal(r.code, 124, `ожидался 124, получен ${r.code}`);
   assert.equal(r.note, "timeout");
-  assert.match(r.out, /таймаут задачи/, "причина таймаута не в журнале");
+  assert.match(r.out, /task timed out/, "причина таймаута не в журнале");
 });
 
 await t("18d. статус задачи берётся из пометки воркера", async () => {
@@ -1459,7 +1465,7 @@ await t("25a. с base собираются и коммиты ветки, и не
 
   assert.match(out, /committed\.txt/, "коммиты ветки не собраны");
   assert.match(out, /правка в рабочем дереве/, "незакоммиченное не собрано");
-  assert.match(out, /Ещё не закоммичено/, "разделы не размечены");
+  assert.match(out, /Not committed yet/, "разделы не размечены");
 });
 
 await t("25b. новый файл показывается содержимым, а не одним именем", async () => {
@@ -1484,7 +1490,7 @@ await t("25c. секреты и двоичные файлы содержимым
   assert.ok(!out.includes("sk-очень-секретно"), "содержимое .env ушло в промпт");
   assert.ok(!out.includes("BEGIN PRIVATE KEY"), "содержимое ключа ушло в промпт");
   assert.match(out, /\.env/, "про .env не сказано вовсе");
-  assert.match(out, /двоичный/, "двоичный файл не помечен");
+  assert.match(out, /binary/, "двоичный файл не помечен");
   assert.match(out, /видимый текст/, "обычный файл перестал вкладываться");
 });
 
@@ -1493,7 +1499,7 @@ await t("25d. непонятная база отклоняется, а не да
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d4=${Date.now()}`);
   assert.throws(
     () => core.collectDiff(dir, "такой-ветки-нет"),
-    /не разрешается в коммит/,
+    /does not resolve to a commit/,
     "несуществующая база принята молча"
   );
 });
@@ -1501,7 +1507,7 @@ await t("25d. непонятная база отклоняется, а не да
 await t("25e. вне git-репозитория ревью отказывает явно", async () => {
   const d = fresh("diff-norepo");
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d5=${Date.now()}`);
-  assert.throws(() => core.collectDiff(d, null), /не git-репозиторий/, "отсутствие репозитория не замечено");
+  assert.throws(() => core.collectDiff(d, null), /not a git repository/, "отсутствие репозитория не замечено");
 });
 
 await t("25f. большой диф не обрезается, а передаётся сводкой", async () => {
@@ -1513,8 +1519,8 @@ await t("25f. большой диф не обрезается, а передаё
   const out = core.collectDiff(dir, null);
 
   assert.ok(!/\[\.\.\. диф обрезан/.test(out), "патч всё ещё обрезается посередине");
-  assert.match(out, /Прочитай нужные места сам/, "нет указания дочитать самому");
-  assert.match(out, /Файлов изменено: 80/, "нет сводки по числу файлов");
+  assert.match(out, /Read the parts you need yourself/, "нет указания дочитать самому");
+  assert.match(out, /Files changed: 80/, "нет сводки по числу файлов");
 });
 
 await t("25g. чужой diff.external не подменяет формат дифа", async () => {
@@ -1740,15 +1746,41 @@ await t("30b. настройка переключает язык, неизвес
 });
 
 await t("30c. недостающий перевод не оставляет описание пустым", async () => {
-  process.env.CODEX_BRIDGE_LANG = "ru";
-  const i18n = await import(`${ROOT_URL}/scripts/i18n.mjs?fb=${Date.now()}`);
-  const ru = i18n.toolText();
-  delete process.env.CODEX_BRIDGE_LANG;
-  const en = i18n.toolText();
+  const stamp = Date.now();
+  const core = await import(`${ROOT_URL}/scripts/i18n.mjs?fb=${stamp}`);
+  const runtime = await import(`${ROOT_URL}/scripts/i18n-runtime.mjs?fb=${stamp}`);
+  const image = await import(`${ROOT_URL}/scripts/i18n-image.mjs?fb=${stamp}`);
+  const claude = await import(`${ROOT_URL}/bridge/i18n-claude.mjs?fb=${stamp}`);
 
-  for (const key of Object.keys(en)) {
-    assert.ok(ru[key] && String(ru[key]).trim(), `ключ ${key} пуст при русском языке`);
+  // Таблицы читаются на каждый вызов, поэтому язык переключается переменной.
+  const both = (fn) => {
+    delete process.env.CODEX_BRIDGE_LANG;
+    const en = fn();
+    process.env.CODEX_BRIDGE_LANG = "ru";
+    const ru = fn();
+    delete process.env.CODEX_BRIDGE_LANG;
+    return { en, ru };
+  };
+
+  const tables = [
+    ["i18n.toolText", () => core.toolText()],
+    ["i18n.uiText", () => core.uiText()],
+    ["i18n.coreText", () => core.coreText()],
+    ["i18n.trailText", () => core.trailText()],
+    ["i18n-image.toolText", () => image.toolText()],
+    ["i18n-claude.toolText", () => claude.toolText()],
+  ];
+
+  for (const [name, fn] of tables) {
+    const { en, ru } = both(fn);
+    assert.ok(Object.keys(en).length, `${name}: английская таблица пуста`);
+    for (const key of Object.keys(en)) {
+      assert.ok(ru[key] !== undefined && ru[key] !== "", `${name}: ключ ${key} пуст при русском языке`);
+    }
   }
+
+  // Модули сообщений отдают строку по ключу — проверяем сам механизм отката.
+  assert.equal(typeof runtime.message("preflight_not_installed"), "string");
 });
 
 await t("30d. команды и агенты остаются на английском", async () => {

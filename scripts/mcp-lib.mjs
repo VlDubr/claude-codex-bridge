@@ -2,6 +2,7 @@
 // Без зависимостей. Используется обоими серверами плагина.
 
 import readline from "node:readline";
+import { message } from "./i18n-runtime.mjs";
 
 // Версии, которые сервер действительно умеет. Заявлять чужую версию нельзя:
 // по спецификации сервер отвечает запрошенной версией только если поддерживает
@@ -86,13 +87,13 @@ export function serve({ name, version = "0.1.0", tools, handle }) {
       msg = JSON.parse(line);
     } catch {
       // JSON-RPC parse error вместо молчаливого игнорирования
-      return send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+      return send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: message("mcp_parse_error") } });
     }
     if (Array.isArray(msg)) {
       return send({
         jsonrpc: "2.0",
         id: null,
-        error: { code: -32600, message: "Батчи не поддерживаются в протоколе 2025-06-18" },
+        error: { code: -32600, message: message("mcp_batches_unsupported") },
       });
     }
     const { id, method, params } = msg;
@@ -139,7 +140,7 @@ export function serve({ name, version = "0.1.0", tools, handle }) {
         }
         return;
       }
-      if (id !== undefined) error(-32601, `Method not found: ${method}`);
+      if (id !== undefined) error(-32601, message("mcp_method_not_found", method));
     } catch (e) {
       // Наружу — только сообщение: stack раскрывает пути и внутреннее устройство.
       process.stderr.write(`[mcp:${name}] ${e?.stack || e}\n`);

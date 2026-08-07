@@ -5,6 +5,7 @@ import path from "node:path";
 import { serve, text, fail } from "./mcp-lib.mjs";
 import { pluginVersion } from "./version.mjs";
 import { probeCodex, envClean } from "./codex-core.mjs";
+import { toolText, message } from "./i18n-image.mjs";
 import {
   generateImage,
   validate,
@@ -14,33 +15,42 @@ import {
   MAX_INPUT_IMAGES,
 } from "./image-core.mjs";
 
+const tx = toolText();
+
 const TOOLS = [
   {
     name: "image_generate",
-    description:
-      "Сгенерировать изображение через встроенный инструмент Codex (gpt-image-2) и сохранить в проект. Работает на подписке ChatGPT, API-ключ не нужен. Занимает 4–6 минут. Возвращает путь к файлу — ОБЯЗАТЕЛЬНО открой его инструментом Read и убедись, что картинка отвечает задаче, прежде чем отчитываться пользователю.",
+    description: tx.generate_d,
     inputSchema: {
       type: "object",
       properties: {
         prompt: {
           type: "string",
-          description: `Описание изображения, до ${PROMPT_MAX} символов. Пиши конкретно: объект, композиция, стиль, освещение, палитра, что НЕ должно попасть в кадр.`,
+          description: tx.generate_prompt(PROMPT_MAX),
         },
-        aspect_ratio: { type: "string", enum: ASPECT_RATIOS, default: "auto" },
-        image_resolution: { type: "string", enum: RESOLUTIONS, default: "1K" },
+        aspect_ratio: {
+          type: "string",
+          enum: ASPECT_RATIOS,
+          default: "auto",
+          description: tx.generate_aspect_ratio,
+        },
+        image_resolution: {
+          type: "string",
+          enum: RESOLUTIONS,
+          default: "1K",
+          description: tx.generate_resolution,
+        },
         images: {
           type: "array",
           maxItems: MAX_INPUT_IMAGES,
           items: { type: "string" },
-          description:
-            "Референсы: пути к ЛОКАЛЬНЫМ файлам относительно корня проекта. URL не принимаются — скачай изображение в проект. Прикрепляются к запросу флагом --image.",
+          description: tx.generate_images,
         },
-        out_dir: { type: "string", description: "Куда сохранить, относительно корня проекта." },
-        name: { type: "string", description: "Основа имени файла." },
+        out_dir: { type: "string", description: tx.generate_out_dir },
+        name: { type: "string", description: tx.generate_name },
         model: {
           type: "string",
-          description:
-            "Модель Codex, которая ведёт сессию генерации. Список — через codex_models. Само изображение в любом случае рисует gpt-image-2.",
+          description: tx.generate_model,
         },
       },
       required: ["prompt"],
@@ -48,14 +58,14 @@ const TOOLS = [
   },
   {
     name: "image_check_params",
-    description: "Проверить сочетание параметров локально, не запуская дорогую генерацию.",
+    description: tx.check_d,
     inputSchema: {
       type: "object",
       properties: {
-        prompt: { type: "string" },
-        aspect_ratio: { type: "string" },
-        image_resolution: { type: "string" },
-        images: { type: "array", items: { type: "string" } },
+        prompt: { type: "string", description: tx.check_prompt },
+        aspect_ratio: { type: "string", description: tx.check_aspect_ratio },
+        image_resolution: { type: "string", description: tx.check_resolution },
+        images: { type: "array", items: { type: "string" }, description: tx.check_images },
       },
       required: ["prompt"],
     },
@@ -73,35 +83,26 @@ async function handle(name, args) {
       images: args.images || [],
     });
     return errors.length
-      ? fail(`Параметры не пройдут:\n- ${errors.join("\n- ")}`)
-      : text("Параметры корректны, можно генерировать.");
+      ? fail(message("params_invalid", errors))
+      : text(message("params_valid"));
   }
 
-  if (name !== "image_generate") return fail(`Неизвестный инструмент: ${name}`);
+  if (name !== "image_generate") return fail(message("unknown_tool", name));
 
   const c = await probeCodex();
   if (c.reason === "not_installed")
-    return fail("Codex CLI не найден. Установи: npm install -g @openai/codex — затем codex login.");
+    return fail(message("codex_not_installed_login"));
   if (c.reason === "not_logged_in")
-    return fail("Codex не авторизован. Выполни в терминале: codex login (вход через аккаунт ChatGPT).");
+    return fail(message("codex_not_logged_in"));
   if (c.reason === "probe_timeout")
-    return fail(
-      "Проверка готовности Codex не завершилась за отведённое время. Сам Codex при этом может быть исправен. Проверь вручную: codex login status."
-    );
+    return fail(message("probe_timeout"));
 
   const cwd = root();
   const r = generateImage({ ...args, cwd });
   if (!r.ok) return fail(r.error);
 
   const rel = path.relative(cwd, r.path) || r.path;
-  return text(
-    [
-      `Готово: ${rel} (${Math.round(r.bytes / 1024)} КБ)` +
-        (r.moved ? `\nФайл забран из ${r.moved} и перемещён в проект.` : ""),
-      "",
-      "СЛЕДУЮЩИЙ ШАГ: открой файл инструментом Read и сверь с задачей. Если результат не соответствует — уточни промпт и сгенерируй заново, не выдавай неподходящую картинку за готовую.",
-    ].join("\n")
-  );
+  return text(message("success", rel, Math.round(r.bytes / 1024), r.moved));
 }
 
 serve({ name: "codex-bridge-image", version: pluginVersion(), tools: TOOLS, handle });
