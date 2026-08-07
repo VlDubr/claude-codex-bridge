@@ -1427,9 +1427,122 @@ await t("24c. инструментам без запуска Codex провер�
   );
 });
 
-// ───────────────────────────────── 25. Версия из единственного источника
+// ───────────────────────────────── 25. Сбор контекста для ревью
 
-await t("25. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
+/** Временный репозиторий с одним коммитом на main. */
+function repo(name) {
+  const d = fresh(name);
+  const g = (...a) =>
+    spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], {
+      cwd: d,
+      encoding: "utf8",
+    });
+  g("init", "-b", "main");
+  fs.writeFileSync(path.join(d, "base.txt"), "начало\n");
+  g("add", "-A");
+  g("commit", "-m", "первый");
+  return { dir: d, g };
+}
+
+await t("25a. с base собираются и коммиты ветки, и незакоммиченное", async () => {
+  const { dir, g } = repo("diff-both");
+  g("checkout", "-b", "feature");
+  fs.writeFileSync(path.join(dir, "committed.txt"), "в коммите\n");
+  g("add", "-A");
+  g("commit", "-m", "правка в ветке");
+  fs.appendFileSync(path.join(dir, "base.txt"), "правка в рабочем дереве\n");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d1=${Date.now()}`);
+  const out = core.collectDiff(dir, "main");
+
+  assert.match(out, /committed\.txt/, "коммиты ветки не собраны");
+  assert.match(out, /правка в рабочем дереве/, "незакоммиченное не собрано");
+  assert.match(out, /Ещё не закоммичено/, "разделы не размечены");
+});
+
+await t("25b. новый файл показывается содержимым, а не одним именем", async () => {
+  const { dir } = repo("diff-untracked");
+  fs.writeFileSync(path.join(dir, "new.js"), "export const answer = 42;\n");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d2=${Date.now()}`);
+  const out = core.collectDiff(dir, null);
+  assert.match(out, /answer = 42/, "содержимое нового файла потеряно, передано только имя");
+});
+
+await t("25c. секреты и двоичные файлы содержимым не вкладываются", async () => {
+  const { dir } = repo("diff-secrets");
+  fs.writeFileSync(path.join(dir, ".env"), "API_KEY=sk-очень-секретно\n");
+  fs.writeFileSync(path.join(dir, "server.key"), "-----BEGIN PRIVATE KEY-----\nтайна\n");
+  fs.writeFileSync(path.join(dir, "blob.bin"), Buffer.from([0, 1, 2, 0, 3]));
+  fs.writeFileSync(path.join(dir, "ok.txt"), "видимый текст\n");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d3=${Date.now()}`);
+  const out = core.collectDiff(dir, null);
+
+  assert.ok(!out.includes("sk-очень-секретно"), "содержимое .env ушло в промпт");
+  assert.ok(!out.includes("BEGIN PRIVATE KEY"), "содержимое ключа ушло в промпт");
+  assert.match(out, /\.env/, "про .env не сказано вовсе");
+  assert.match(out, /двоичный/, "двоичный файл не помечен");
+  assert.match(out, /видимый текст/, "обычный файл перестал вкладываться");
+});
+
+await t("25d. непонятная база отклоняется, а не даёт пустой диф", async () => {
+  const { dir } = repo("diff-badbase");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d4=${Date.now()}`);
+  assert.throws(
+    () => core.collectDiff(dir, "такой-ветки-нет"),
+    /не разрешается в коммит/,
+    "несуществующая база принята молча"
+  );
+});
+
+await t("25e. вне git-репозитория ревью отказывает явно", async () => {
+  const d = fresh("diff-norepo");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d5=${Date.now()}`);
+  assert.throws(() => core.collectDiff(d, null), /не git-репозиторий/, "отсутствие репозитория не замечено");
+});
+
+await t("25f. большой диф не обрезается, а передаётся сводкой", async () => {
+  const { dir, g } = repo("diff-big");
+  for (let i = 0; i < 80; i++) fs.writeFileSync(path.join(dir, `f${i}.txt`), `файл ${i}\n`);
+  g("add", "-A");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d6=${Date.now()}`);
+  const out = core.collectDiff(dir, null);
+
+  assert.ok(!/\[\.\.\. диф обрезан/.test(out), "патч всё ещё обрезается посередине");
+  assert.match(out, /Прочитай нужные места сам/, "нет указания дочитать самому");
+  assert.match(out, /Файлов изменено: 80/, "нет сводки по числу файлов");
+});
+
+await t("25g. чужой diff.external не подменяет формат дифа", async () => {
+  const { dir, g } = repo("diff-external");
+  // Подменённый драйвер печатает мусор вместо патча. Без --no-ext-diff
+  // ревью получило бы его вывод вместо изменений.
+  g("config", "diff.external", "echo ЧУЖОЙ-ДРАЙВЕР");
+  fs.appendFileSync(path.join(dir, "base.txt"), "новая строка\n");
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d7=${Date.now()}`);
+  const out = core.collectDiff(dir, null);
+  assert.ok(!out.includes("ЧУЖОЙ-ДРАЙВЕР"), "внешний diff-драйвер подменил патч");
+  assert.match(out, /новая строка/, "настоящий патч потерян");
+});
+
+await tExec("25h. символическая ссылка не разыменовывается", async () => {
+  const { dir } = repo("diff-symlink");
+  const outside = path.join(TMP, "чужой-секрет.txt");
+  fs.writeFileSync(outside, "СОДЕРЖИМОЕ ЗА ПРЕДЕЛАМИ РЕПОЗИТОРИЯ");
+  fs.symlinkSync(outside, path.join(dir, "link.txt"));
+
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?d8=${Date.now()}`);
+  const out = core.collectDiff(dir, null);
+  assert.ok(!out.includes("СОДЕРЖИМОЕ ЗА ПРЕДЕЛАМИ"), "по симлинку прочитан файл вне репозитория");
+  assert.match(out, /символическая ссылка/, "симлинк не помечен");
+});
+
+// ───────────────────────────────── 26. Версия из единственного источника
+
+await t("26. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
   const { pluginVersion } = await import(`${ROOT_URL}/scripts/version.mjs?v=${Date.now()}`);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"));
   assert.equal(pluginVersion(), manifest.version, "версия разошлась с манифестом");
@@ -1440,6 +1553,22 @@ await t("25. версия MCP-серверов берётся из манифе�
     const src = fs.readFileSync(path.join(ROOT, f), "utf8");
     assert.ok(/pluginVersion\(\)/.test(src), `${f} не берёт версию из манифеста`);
     assert.ok(!/version:\s*"\d+\.\d+\.\d+"/.test(src), `${f} снова несёт версию строкой`);
+  }
+});
+
+await t("27. у каждой команды объявлен свой набор инструментов", async () => {
+  const dir = path.join(ROOT, "commands");
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
+  assert.ok(files.length >= 14, `команд найдено ${files.length}`);
+
+  for (const f of files) {
+    // Переводы строк нормализуются: часть файлов в репозитории с CRLF.
+    const src = fs.readFileSync(path.join(dir, f), "utf8").replace(/\r\n/g, "\n");
+    const fm = /^---\n([\s\S]*?)\n---/.exec(src);
+    assert.ok(fm, `${f}: нет frontmatter`);
+    const line = /^allowed-tools:\s*(.+)$/m.exec(fm[1]);
+    assert.ok(line, `${f}: нет allowed-tools — подтверждения снимаются неявно`);
+    assert.ok(line[1].trim().length > 0, `${f}: allowed-tools пуст`);
   }
 });
 

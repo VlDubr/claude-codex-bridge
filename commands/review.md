@@ -1,6 +1,7 @@
 ---
 description: Ревью текущих изменений силами GPT (Codex)
 argument-hint: "[--base <ветка>] [--now] [доп. фокус]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_review
 ---
 
 Пользователь просит ревью кода от GPT. Аргументы: `$ARGUMENTS`

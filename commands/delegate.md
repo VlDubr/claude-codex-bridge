@@ -1,6 +1,7 @@
 ---
 description: Делегировать задачу GPT — он исследует и починит сам
 argument-hint: "[--model <модель>] [--effort <уровень>] <описание задачи>"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_delegate
 ---
 
 Пользователь делегирует задачу GPT. Аргументы: `$ARGUMENTS`

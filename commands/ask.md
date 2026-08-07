@@ -1,6 +1,7 @@
 ---
 description: Спросить второе мнение у GPT прямо сейчас
 argument-hint: "<вопрос>"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_ask
 ---
 
 Пользователь хочет мнение GPT по вопросу: `$ARGUMENTS`

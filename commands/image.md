@@ -1,6 +1,7 @@
 ---
 description: Сгенерировать изображение (GPT Image 2) и проверить его на соответствие задаче
 argument-hint: "[--ar 16:9] [--res 2K] [--ref файл|url] [--out каталог] [--no-check] <описание>"
+allowed-tools: mcp__plugin_codex-bridge_image__image_generate, mcp__plugin_codex-bridge_image__image_check_params, Read
 ---
 
 Пользователь просит изображение: `$ARGUMENTS`

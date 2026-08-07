@@ -1,6 +1,7 @@
 ---
 description: Провести спор Claude ↔ GPT по спорному решению
 argument-hint: "[--rounds N] <тема спора>"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_ask
 ---
 
 Пользователь хочет разбор темы двумя моделями: `$ARGUMENTS`

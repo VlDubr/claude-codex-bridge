@@ -1,6 +1,7 @@
 ---
 description: Показать, чем занята вызванная модель прямо сейчас
 argument-hint: "[job-id] [--limit N]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_progress
 ---
 
 Вызови инструмент **codex_progress** с `job_id` из `$ARGUMENTS` (если не указан — последняя задача) и `limit`, если передан `--limit`.

@@ -21,6 +21,7 @@ import {
   humanAge,
   envClean,
   repoKey,
+  buildPrompt,
 } from "./codex-core.mjs";
 import { describe } from "./codex-events.mjs";
 import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
@@ -506,16 +507,25 @@ async function handleTool(name, args, ctx = {}) {
     case "codex_challenge": {
       const mode = name === "codex_review" ? "review" : "challenge";
       const background = args.background !== false;
+      // Сбор контекста теперь отказывает явно: не репозиторий, несуществующая
+      // база, сбойный git. Раньше любая из этих причин давала пустой диф и
+      // ревью «ни о чём», поэтому отказ доносим как есть, а не как сбой сервера.
+      // Промпт строится здесь же и передаётся готовым: иначе git-диф собирался
+      // бы дважды — на проверке и на запуске.
+      let prompt;
+      try {
+        prompt = buildPrompt({ mode, cwd, ...args });
+      } catch (e) {
+        return err(`Не удалось собрать изменения для ревью: ${e?.message || e}`);
+      }
+      const spec = { mode, cwd, ...args, ...applyDefaults(args, cwd), prompt };
       if (!background) {
-        const r = await runJob(
-          { mode, cwd, ...args, ...applyDefaults(args, cwd) },
-          { waitMs: 480_000, onEvent: notifier(ctx), signal: ctx.signal }
-        );
+        const r = await runJob(spec, { waitMs: 480_000, onEvent: notifier(ctx), signal: ctx.signal });
         if (r.aborted) return text(`Вызов отменён, задача ${r.job.id} остановлена.`);
         if (r.timedOut) return text(`Не уложилось в 8 минут — работа продолжается в фоне: ${r.job.id}`);
         return r.ok ? text(renderRun(r.job.id, r.output)) : err(r.error);
       }
-      const job = startJob({ mode, cwd, ...args, ...applyDefaults(args, cwd) });
+      const job = startJob(spec);
       return text(
         `Запущено ${mode === "review" ? "ревью" : "состязательное ревью"} в фоне: ${job.id}\nСледить: codex_progress. Забрать результат: codex_result.`
       );

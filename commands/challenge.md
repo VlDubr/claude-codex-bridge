@@ -1,6 +1,7 @@
 ---
 description: Состязательное ревью — GPT оспаривает дизайн-решение
 argument-hint: "[--base <ветка>] [--now] <что оспорить>"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_challenge
 ---
 
 Пользователь просит состязательное ревью. Аргументы: `$ARGUMENTS`

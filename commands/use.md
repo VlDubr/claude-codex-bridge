@@ -1,6 +1,7 @@
 ---
 description: Выбрать модель Codex по умолчанию для этого репозитория
 argument-hint: "[<модель>] [--effort <уровень>] [--clear]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_use, mcp__plugin_codex-bridge_codex__codex_models
 ---
 
 Пользователь выбирает модель Codex: `$ARGUMENTS`

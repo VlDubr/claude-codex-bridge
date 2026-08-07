@@ -1,6 +1,7 @@
 ---
 description: Показать модели, реально доступные в этом Codex
 argument-hint: "[--refresh]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_models
 ---
 
 Вызови инструмент **codex_models**, передав `refresh: true`, если в `$ARGUMENTS` есть `--refresh`.

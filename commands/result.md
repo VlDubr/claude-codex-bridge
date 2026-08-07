@@ -1,6 +1,7 @@
 ---
 description: Показать результат завершённой задачи Codex
 argument-hint: "[job-id]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_result, Bash(git status)
 ---
 
 Вызови инструмент **codex_result** с `job_id` из `$ARGUMENTS` (если пусто — возьмётся последняя задача).

@@ -1,6 +1,7 @@
 ---
 description: Поговорить с моделью Codex как с отдельным собеседником (тред помнит предыдущие ходы)
 argument-hint: "[--model <модель>] [--chat <имя>] [--write] <сообщение>"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_chat, mcp__plugin_codex-bridge_codex__codex_chats
 ---
 
 Пользователь обращается к модели Codex: `$ARGUMENTS`

@@ -348,23 +348,246 @@ export function buildArgs({ mode, model, effort, cwd, sandbox, images = [], resu
 
 // ------------------------------------------------------------ сбор контекста
 
-export function collectDiff(cwd, base) {
-  const run = (a) => spawnSync("git", a, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  let out = "";
-  if (base) {
-    const mb = run(["merge-base", base, "HEAD"]);
-    const ref = mb.status === 0 ? mb.stdout.trim() : base;
-    out = run(["diff", `${ref}...HEAD`]).stdout || "";
-  } else {
-    out = run(["diff", "HEAD"]).stdout || "";
-    const untracked = (run(["ls-files", "--others", "--exclude-standard"]).stdout || "")
-      .split("\n")
-      .filter(Boolean);
-    if (untracked.length) out += `\n\n[Новые неотслеживаемые файлы]\n${untracked.join("\n")}\n`;
+// Пороги сбора. Диф сверх порога не обрезается посреди hunk — вместо этого
+// модель получает сводку и указание дочитать нужное самой: обрезанный патч
+// выглядит целым и молча уводит ревью мимо половины изменений.
+const DIFF_MAX_BYTES = 256 * 1024;
+const DIFF_MAX_FILES = 60;
+const UNTRACKED_FILE_MAX_BYTES = 24 * 1024;
+const UNTRACKED_TOTAL_MAX_BYTES = 128 * 1024;
+const UNTRACKED_MAX_FILES = 25;
+
+// Новые файлы вкладываются содержимым, поэтому сюда не должны попадать
+// секреты: ключи, окружение, учётные данные. Такие файлы только называются.
+const SECRETISH =
+  /(^|\/)(\.env(\.[^/]*)?|\.netrc|\.npmrc|\.pypirc|\.htpasswd|id_(rsa|dsa|ecdsa|ed25519)|credentials|[^/]*\.(pem|key|p12|pfx|jks|keystore|ppk))$/i;
+
+// Диф всегда читается без внешнего diff-драйвера: чужой diff.external в
+// конфиге репозитория иначе подменяет формат вывода. Подмодули — одной
+// строкой: их полный диф втягивает чужой репозиторий целиком.
+const DIFF_FLAGS = ["--no-ext-diff", "--submodule=short"];
+
+function git(cwd, args, { maxBuffer = 64 * 1024 * 1024 } = {}) {
+  return spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer });
+}
+
+/** Git обязан отработать: молчаливый пустой вывод неотличим от «изменений нет». */
+function gitChecked(cwd, args) {
+  const r = git(cwd, args);
+  if (r.error) throw new Error(`git ${args[0]} не запустился: ${r.error.message || r.error}`);
+  if (r.status !== 0) {
+    throw new Error(`git ${args.join(" ")} завершился с кодом ${r.status}: ${(r.stderr || "").trim() || "без вывода"}`);
   }
-  const LIMIT = 200_000;
-  if (out.length > LIMIT) out = out.slice(0, LIMIT) + `\n\n[... диф обрезан на ${LIMIT} символах ...]`;
-  return out.trim();
+  return r.stdout || "";
+}
+
+/** Список путей из вывода с -z: имя файла может содержать перевод строки. */
+const zSplit = (s) => String(s || "").split("\0").filter(Boolean);
+
+/**
+ * Проверка ссылки до её использования. Без --end-of-options значение вроде
+ * "--upload-pack=..." разбирается как флаг; ^{commit} требует, чтобы ссылка
+ * указывала на коммит, а не на дерево или тег-объект.
+ */
+function resolveCommit(cwd, ref) {
+  const r = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+  const sha = (r.stdout || "").trim();
+  if (r.status !== 0 || !sha) {
+    throw new Error(`Ссылка ${JSON.stringify(ref)} не разрешается в коммит этого репозитория.`);
+  }
+  return sha;
+}
+
+/** Ветка по умолчанию: сравнивать не с чем, если её не нашли. */
+function defaultBase(cwd) {
+  const head = git(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  if (head.status === 0) {
+    const name = (head.stdout || "").trim();
+    if (name.startsWith("refs/remotes/")) return name.slice("refs/remotes/".length);
+  }
+  for (const c of ["main", "master", "trunk"]) {
+    for (const ref of [`refs/heads/${c}`, `refs/remotes/origin/${c}`]) {
+      if (git(cwd, ["show-ref", "--verify", "--quiet", ref]).status === 0) {
+        return ref.startsWith("refs/remotes/") ? ref.slice("refs/remotes/".length) : c;
+      }
+    }
+  }
+  return null;
+}
+
+const isProbablyText = (buf) => {
+  const head = buf.subarray(0, 8000);
+  return !head.includes(0);
+};
+
+/** Новые файлы: содержимое, но не вслепую. */
+function untrackedSection(cwd) {
+  const files = zSplit(gitChecked(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]));
+  if (!files.length) return "";
+
+  const parts = [];
+  const listedOnly = [];
+  let totalBytes = 0;
+
+  for (const rel of files.slice(0, UNTRACKED_MAX_FILES)) {
+    const abs = path.join(cwd, rel);
+    let st;
+    try {
+      // lstat, не stat: разыменование симлинка вложило бы в ревью файл,
+      // лежащий вне репозитория.
+      st = fs.lstatSync(abs);
+    } catch {
+      listedOnly.push(`${rel} — нечитаем`);
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      let target = "?";
+      try {
+        target = fs.readlinkSync(abs);
+      } catch {}
+      listedOnly.push(`${rel} — символическая ссылка на ${target}`);
+      continue;
+    }
+    if (st.isDirectory()) {
+      listedOnly.push(`${rel} — каталог`);
+      continue;
+    }
+    if (!st.isFile()) {
+      listedOnly.push(`${rel} — не обычный файл`);
+      continue;
+    }
+    if (SECRETISH.test(rel.replace(/\\/g, "/"))) {
+      listedOnly.push(`${rel} — похоже на секрет, содержимое не показано`);
+      continue;
+    }
+    if (st.size > UNTRACKED_FILE_MAX_BYTES) {
+      listedOnly.push(`${rel} — ${st.size} Б, больше предела ${UNTRACKED_FILE_MAX_BYTES} Б`);
+      continue;
+    }
+    if (totalBytes + st.size > UNTRACKED_TOTAL_MAX_BYTES) {
+      listedOnly.push(`${rel} — не поместился в общий предел`);
+      continue;
+    }
+
+    let buf;
+    try {
+      buf = fs.readFileSync(abs);
+    } catch {
+      listedOnly.push(`${rel} — нечитаем`);
+      continue;
+    }
+    if (!isProbablyText(buf)) {
+      listedOnly.push(`${rel} — двоичный`);
+      continue;
+    }
+    totalBytes += buf.length;
+    parts.push(`### ${rel}\n\`\`\`\n${buf.toString("utf8").trimEnd()}\n\`\`\``);
+  }
+
+  if (files.length > UNTRACKED_MAX_FILES) {
+    listedOnly.push(`… и ещё ${files.length - UNTRACKED_MAX_FILES} файлов сверх предела ${UNTRACKED_MAX_FILES}`);
+  }
+  if (listedOnly.length) {
+    parts.push(`### Показаны только именами\n${listedOnly.map((l) => `- ${l}`).join("\n")}`);
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Диф заданного диапазона либо сводка с указанием дочитать самому.
+ * Размер сначала измеряется дешёвым --numstat: полный диф в память не
+ * загружается, если заведомо велик.
+ */
+function diffOrSummary(cwd, range) {
+  const scope = range ? [range] : [];
+  const numstat = gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--numstat", ...scope]);
+  const fileCount = numstat.split("\n").filter((l) => l.trim()).length;
+  if (!fileCount) return { text: "(изменений нет)", inline: true, fileCount: 0 };
+
+  if (fileCount <= DIFF_MAX_FILES) {
+    const r = git(cwd, ["diff", ...DIFF_FLAGS, ...scope], { maxBuffer: DIFF_MAX_BYTES });
+    // ENOBUFS здесь означает «не поместилось»: stderr у git diff пуст, а
+    // предел выставлен именно под ожидаемый объём патча.
+    if (!r.error && r.status === 0) return { text: r.stdout, inline: true, fileCount };
+    if (r.error && r.error.code !== "ENOBUFS") {
+      throw new Error(`git diff не выполнен: ${r.error.message || r.error}`);
+    }
+    if (!r.error && r.status !== 0) {
+      throw new Error(`git diff завершился с кодом ${r.status}: ${(r.stderr || "").trim() || "без вывода"}`);
+    }
+  }
+
+  const shortstat = gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--shortstat", ...scope]).trim();
+  const names = zSplit(gitChecked(cwd, ["diff", ...DIFF_FLAGS, "--name-status", "-z", ...scope]));
+  return {
+    inline: false,
+    fileCount,
+    text:
+      `Патч слишком велик, чтобы вложить его целиком, и обрезать его посередине нельзя — ` +
+      `обрезанный патч выглядит полным. Прочитай нужные места сам, только на чтение: ` +
+      `\`git diff ${range || ""}\`.`.replace(/\s+`\.$/, "`.") +
+      `\n\nСводка: ${shortstat || "нет"}\nФайлов изменено: ${fileCount}\n\n` +
+      names.join("\n"),
+  };
+}
+
+const section = (title, body) => `## ${title}\n\n${String(body || "").trim() || "(пусто)"}\n`;
+
+/**
+ * Контекст для ревью.
+ *
+ * Раньше сбор был устроен так, что две его ветки не пересекались: с base
+ * ревьюились только коммиты, без base — только рабочее дерево. На ветке с
+ * коммитами и незакоммиченными правками любой из двух вызовов молча показывал
+ * половину картины. Теперь при base собираются обе части, разделённые явно:
+ * что уйдёт в PR и что ещё нет — разные вещи, и модель должна их различать.
+ */
+export function collectDiff(cwd, base) {
+  if (git(cwd, ["rev-parse", "--show-toplevel"]).status !== 0) {
+    throw new Error("Это не git-репозиторий — ревьюить нечего.");
+  }
+
+  const dirty = () => {
+    const staged = zSplit(gitChecked(cwd, ["diff", "--cached", "--name-only", "-z"]));
+    const unstaged = zSplit(gitChecked(cwd, ["diff", "--name-only", "-z"]));
+    const untracked = zSplit(gitChecked(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]));
+    return staged.length + unstaged.length + untracked.length > 0;
+  };
+
+  const workingTree = () => {
+    // HEAD, а не пустой диапазон: без него в патч попадает только unstaged,
+    // а проиндексованное — то, что человек уже готовит к коммиту, — исчезает.
+    const d = diffOrSummary(cwd, "HEAD");
+    const untracked = untrackedSection(cwd);
+    return section("Ещё не закоммичено", d.text) + (untracked ? `\n${section("Новые файлы", untracked)}` : "");
+  };
+
+  // Без base и с грязным деревом ревьюится то, над чем идёт работа.
+  // Дерево чистое — сравнивать не с чем, поэтому берём ветку по умолчанию:
+  // иначе команда возвращала пустоту и выглядела сломанной.
+  let baseRef = base || null;
+  if (!baseRef) {
+    if (dirty()) return `${section("Ревьюется", "Незакоммиченные изменения рабочего дерева.")}\n${workingTree()}`.trim();
+    baseRef = defaultBase(cwd);
+    if (!baseRef) {
+      throw new Error("Рабочее дерево чистое, а ветку по умолчанию найти не удалось. Укажи base явно.");
+    }
+  }
+
+  const baseSha = resolveCommit(cwd, baseRef);
+  const mergeBase = (git(cwd, ["merge-base", baseSha, "HEAD"]).stdout || "").trim() || baseSha;
+  const branch = (git(cwd, ["branch", "--show-current"]).stdout || "").trim() || "HEAD";
+  const log = gitChecked(cwd, ["log", "--oneline", "--no-decorate", `${mergeBase}..HEAD`]).trim();
+  const committed = diffOrSummary(cwd, `${mergeBase}..HEAD`);
+
+  const head =
+    `Ветка ${branch} относительно ${baseRef} (общий предок ${mergeBase.slice(0, 12)}).\n` +
+    `Ниже две части: закоммиченное в ветке и то, что ещё не закоммичено. ` +
+    `Первое уйдёт в PR, второе — нет.`;
+
+  const parts = [section("Ревьюется", head), section("Коммиты ветки", log || "(коммитов нет)"), section("Изменения в коммитах", committed.text)];
+  parts.push(dirty() ? workingTree() : section("Ещё не закоммичено", "(рабочее дерево чистое)"));
+  return parts.join("\n").trim();
 }
 
 // ------------------------------------------------------------ шаблоны промптов
@@ -379,8 +602,10 @@ const PROMPTS = {
 
 Для каждого пункта дай файл:строку и конкретное предложение. Если что-то непонятно из дифа — прочитай нужные файлы в репозитории. Не хвали код, если хвалить не за что; пустая секция лучше воды.
 ${extra ? `\nДополнительный фокус от пользователя: ${extra}\n` : ""}
-=== ИЗМЕНЕНИЯ ===
-${diff || "(диф пуст — посмотри рабочее дерево сам)"}`,
+Контекст ниже разбит на разделы. Раздел «Ещё не закоммичено» — правки, которых нет в коммитах ветки: их состояние отличается от остального, учитывай это в замечаниях. Если вместо патча стоит указание дочитать самому — читай файлы, не додумывай.
+
+=== КОНТЕКСТ РЕВЬЮ ===
+${diff || "(изменений не найдено — посмотри рабочее дерево сам)"}`,
 
   challenge: (diff, focus) => `Ты выступаешь состязательным ревьюером. Твоя задача — не найти опечатки, а оспорить решение.
 
@@ -392,8 +617,10 @@ ${diff || "(диф пуст — посмотри рабочее дерево с�
 
 Не соглашайся из вежливости. Если решение действительно хорошее — скажи это прямо и укажи, при каких условиях оно перестанет быть хорошим.
 ${focus ? `\nПользователь просит сфокусироваться на: ${focus}\n` : ""}
-=== ИЗМЕНЕНИЯ ===
-${diff || "(диф пуст — посмотри рабочее дерево сам)"}`,
+Контекст ниже разбит на разделы. Раздел «Ещё не закоммичено» — правки, которых нет в коммитах ветки: их состояние отличается от остального, учитывай это в замечаниях. Если вместо патча стоит указание дочитать самому — читай файлы, не додумывай.
+
+=== КОНТЕКСТ РЕВЬЮ ===
+${diff || "(изменений не найдено — посмотри рабочее дерево сам)"}`,
 
   delegate: (task) => `Тебе делегирована задача в этом репозитории. Ты можешь читать и изменять файлы, запускать тесты и команды сборки.
 
