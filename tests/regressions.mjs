@@ -331,6 +331,9 @@ console.log("ok");`,
 
 await tExec("5a. текстовый файл не принимается за изображение", async () => {
   const d = fresh("img-fake");
+  // Тексты проверяются по-русски, значит язык задаётся явно: по умолчанию он
+  // английский, и без этого тест проверял бы не поведение, а язык среды.
+  process.env.CODEX_BRIDGE_LANG = "ru";
   const stray = path.join(d, "gen");
   fs.mkdirSync(stray, { recursive: true });
   process.env.CODEX_BIN = fakeCodex(d);
@@ -342,6 +345,7 @@ await tExec("5a. текстовый файл не принимается за и
   assert.equal(r.ok, false, "текстовый файл принят как изображение");
   assert.match(r.error, /не является изображением|вне проекта/);
   delete process.env.FAKE;
+  delete process.env.CODEX_BRIDGE_LANG;
 });
 
 await t("5b. out_dir с .. и абсолютный путь отвергаются", async () => {
@@ -368,6 +372,7 @@ await t("5c. SAVED вне проекта и вне каталога Codex отв
 
 await tExec("5d. ненулевой код Codex не считается успехом", async () => {
   const d = fresh("img-exit");
+  process.env.CODEX_BRIDGE_LANG = "ru";
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.FAKE = "exit7";
   const img = await import(`${ROOT_URL}/scripts/image-core.mjs?x=${Date.now()}`);
@@ -375,6 +380,7 @@ await tExec("5d. ненулевой код Codex не считается усп�
   assert.equal(r.ok, false);
   assert.match(r.error, /кодом 7/);
   delete process.env.FAKE;
+  delete process.env.CODEX_BRIDGE_LANG;
 });
 
 // ───────────────────────────────── 6. Безопасность config.toml
@@ -793,6 +799,7 @@ await t("16c. не-JSON вывод не теряется (старый Codex б�
 
 await tExec("16d. таймаут показывает, что модель успела сделать", async () => {
   const d = fresh("timeout-trail");
+  process.env.CODEX_BRIDGE_LANG = "ru";
   const bin = path.join(d, "codex");
   fs.writeFileSync(
     bin,
@@ -819,6 +826,7 @@ if(a[0]==="exec"){
   const trail = r.trail.join("\n");
   assert.match(trail, /размышляет|запускает/, `в ленте нет действий: ${trail}`);
   core.cancelJob(r.job.id);
+  delete process.env.CODEX_BRIDGE_LANG;
 });
 
 await tExec("16e. --json добавляется в аргументы, когда поддержан", async () => {
@@ -881,8 +889,11 @@ await tExec("11. local имеет приоритет над project и user", as
     "node",
     [
       "-e",
-      `const tp=await import(${JSON.stringify(`${ROOT}/bridge/tool-proxy.mjs`)});
-       console.log(JSON.stringify(tp.discoverClaudeServers(${JSON.stringify(path.join(d, "proj"))})));`,
+      // Без top-level await: `node -e` разбирает код как CommonJS вплоть до
+      // Node 20, и await на верхнем уровне там синтаксическая ошибка.
+      `import(${JSON.stringify(`${ROOT}/bridge/tool-proxy.mjs`)}).then((tp) => {
+         console.log(JSON.stringify(tp.discoverClaudeServers(${JSON.stringify(path.join(d, "proj"))})));
+       });`,
     ],
     { encoding: "utf8", env: { ...process.env, HOME: home }, input: "" }
   );
@@ -1603,6 +1614,7 @@ await t("25g. чужой diff.external не подменяет формат ди
 });
 
 await tExec("25h. символическая ссылка не разыменовывается", async () => {
+  process.env.CODEX_BRIDGE_LANG = "ru";
   const { dir } = repo("diff-symlink");
   const outside = path.join(TMP, "чужой-секрет.txt");
   fs.writeFileSync(outside, "СОДЕРЖИМОЕ ЗА ПРЕДЕЛАМИ РЕПОЗИТОРИЯ");
@@ -1612,6 +1624,7 @@ await tExec("25h. символическая ссылка не разымено�
   const out = core.collectDiff(dir, null);
   assert.ok(!out.includes("СОДЕРЖИМОЕ ЗА ПРЕДЕЛАМИ"), "по симлинку прочитан файл вне репозитория");
   assert.match(out, /символическая ссылка/, "симлинк не помечен");
+  delete process.env.CODEX_BRIDGE_LANG;
 });
 
 // ───────────────────────────────── 26. Предел одновременных задач
@@ -2325,10 +2338,12 @@ await t("32c. код возврата появляется только посл
   const lines = 4000;
   fs.writeFileSync(
     talker,
+    // Без process.exit: на POSIX stdout процесса — pipe, и принудительный
+// выход выбросил бы недописанное ядром, то есть тест ловил бы собственную
+// потерю данных вместо гонки в воркере. Процесс уходит сам, дописав всё.
     `let s = "";
 for (let i = 0; i < ${lines}; i++) s += JSON.stringify({ type: "item.completed", item: { type: "agentMessage", text: "строка " + i } }) + "\\n";
 process.stdout.write(s);
-process.exit(0);
 `
   );
   const spec = {
