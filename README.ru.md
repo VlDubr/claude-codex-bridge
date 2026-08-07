@@ -146,6 +146,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 
 | Параметр | Что задаёт |
 |---|---|
+| `language` | Язык сообщений и промптов, уходящих в Codex: `en` (по умолчанию) или `ru`. Модель отвечает на языке промпта, поэтому настройка задаёт и язык её ответов. Команды и агенты всегда английские |
 | `default_model` | Модель Codex по умолчанию. Список — `/codex-bridge:models` |
 | `default_effort` | Уровень reasoning: `none`, `low`, `medium`, `high`, `xhigh`, `max`. Точный набор зависит от модели — см. `/codex-bridge:models` |
 | `review_backend` | Транспорт ревью: по умолчанию `exec`; `app-server` явно включает нативный reviewer с безопасным fallback до принятия запроса |

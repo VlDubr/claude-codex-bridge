@@ -146,6 +146,7 @@ On enable, Claude Code prompts for a few values — all optional:
 
 | Setting | What it controls |
 |---|---|
+| `language` | Language of messages and of the prompts sent to Codex — `en` (default) or `ru`. The prompt's language is what the model answers in, so this also sets the language of its replies. Commands and agents stay English |
 | `default_model` | Default Codex model. See `/codex-bridge:models` for the list |
 | `default_effort` | Reasoning level: `none`, `low`, `medium`, `high`, `xhigh`, `max`. The exact set depends on the model — see `/codex-bridge:models` |
 | `review_backend` | Review transport: `exec` by default, or the opt-in native `app-server` reviewer with safe fallback before acceptance |

@@ -28,31 +28,38 @@ claude-codex-bridge/
 │   ├── plugin.json          manifest, userConfig, defaultEnabled: false
 │   └── marketplace.json     single-plugin catalog, source: "."
 ├── .mcp.json                registers the codex and image servers
-├── commands/                13 slash commands (prompt templates)
+├── commands/                14 slash commands (prompt templates)
 ├── agents/                  gpt-delegate, gpt-advisor, gpt-chat, image-smith
 ├── hooks/hooks.json         SessionStart → preflight
+├── .github/workflows/       tests.yml: matrix (Linux/Windows × Node 20.11/22) + strict validate
 ├── scripts/
 │   ├── mcp-lib.mjs          MCP transport (server side): JSON-RPC over stdio
 │   ├── codex-core.mjs       codex exec wrapper, capabilities, job manager
-│   ├── job-worker.mjs       one process per Codex run
+│   ├── job-worker.mjs       one process per Codex run, both backends
+│   ├── app-server.mjs       JSON-RPC client for codex app-server (native review)
 │   ├── proc.mjs             portable process-tree termination
 │   ├── chat-store.mjs       conversation threads, per-thread lock
 │   ├── prefs.mjs            default model and effort per repository
 │   ├── statusline.mjs       status line: what the jobs are doing now
 │   ├── mcp-codex.mjs        MCP server, Claude → GPT
-│   ├── codex-health.mjs           диагностика установки Codex, рассинхрон версий
-│   ├── codex-events.mjs           разбор JSONL-потока событий codex exec --json
+│   ├── codex-health.mjs     Codex installation diagnostics, version mismatch
+│   ├── codex-events.mjs     event parsing: codex exec --json and app-server
 │   ├── models.mjs           model catalog: query Codex, cache, validate
 │   ├── image-core.mjs       generation via the built-in image_gen tool
 │   ├── mcp-image.mjs        MCP server for image generation
 │   ├── link-back.mjs        safe editing of ~/.codex/config.toml
 │   ├── setup.mjs            diagnostics, allowlist, link-back
+│   ├── version.mjs          single source of the version: plugin.json
+│   ├── i18n.mjs             outward-facing texts and prompts, en/ru
+│   ├── i18n-runtime.mjs     runtime messages, en/ru
+│   ├── i18n-image.mjs       image-generation texts, en/ru
+│   ├── i18n-claude.mjs      reverse-bridge texts, en/ru
 │   └── preflight.mjs        SessionStart hook, bridge path self-healing
 ├── bridge/
 │   ├── mcp-claude.mjs       MCP server, GPT → Claude
 │   ├── mcp-client.mjs       MCP client for connecting to Claude's servers
 │   └── tool-proxy.mjs       allowlist, server discovery, re-export
-└── tests/regressions.mjs    59 regression tests
+└── tests/regressions.mjs    119 regression tests
 ```
 
 ---
@@ -72,6 +79,14 @@ The prefix is never optional: even when a command's name matches the plugin's, t
 ---
 
 ## Internals
+
+### Language of outward-facing text
+
+The plugin was written in Russian, prompts included. A Russian prompt makes both Codex and Claude answer in Russian, so for a non-Russian user this wasn't "a plugin with Russian docs" — it was a plugin that changed the language of their output. English is now the default; Russian is the `language` setting (`CODEX_BRIDGE_LANG=ru`).
+
+Everything the user or the called model sees lives in the `i18n*.mjs` files: `i18n.mjs` (prompts and core texts), `i18n-runtime.mjs` (runtime messages), `i18n-image.mjs`, `i18n-claude.mjs`. `lang()` ignores an unknown value rather than failing — there is nowhere to report it from. Code comments stay Russian: the author reads them, the user doesn't.
+
+Commands and agents are English-only: their frontmatter is what Claude Code indexes, and it is read at load time, before any setting is known.
 
 ### Detecting `codex exec` flags
 
@@ -109,19 +124,46 @@ While the call is in flight, every meaningful event goes to the client as `notif
 
 Only reasoning *summaries* leave Codex; full chain-of-thought is not exposed. With `model_reasoning_summary="auto"` there may be no summaries at all, hence the `reasoning_summary` setting.
 
+### Two review backends
+
+`review_backend` picks how `codex_review` runs:
+
+| Backend | Transport | What Codex does |
+|---|---|---|
+| `exec` (default) | `codex exec --json` | reviews a diff we assembled and put in the prompt |
+| `app-server` | `codex app-server --stdio`, JSON-RPC over stdio | its own `review/start` reviewer decides what to read |
+
+`app-server.mjs` is a minimal JSON-RPC client: `initialize` → `initialized` → `thread/start` → `review/start`, notifications translated into the same event shape by `fromAppServerNotification()` so the trail, the log, and `codex_progress` don't care which backend produced them. Cancellation goes out as `turn/interrupt`. The protocol was checked against a live binary: `jsonrpc` is optional in its frames, and token counters arrive separately in `thread/tokenUsage/updated` — the client keeps the last `tokenUsage.total` and attaches it to `turn.completed`, otherwise usage would be missing from the native path.
+
+Falling back to `exec` is only safe **before the request reaches Codex**. The boundary is `dispatched` — the moment the frame is written to stdin — not `accepted`, the moment a response comes back: a review that already started spends quota, and a fallback would run it twice. The one exception is an explicit JSON-RPC error (`error.rpc`): a refusal proves the review never began, so `exec` may still run.
+
+The diff is assembled for `app-server` too, but only as material for that fallback. If assembling it fails, the native review still starts — `allowFallback: false` is recorded in the job spec, and the worker rethrows instead of silently switching backends.
+
+### Collecting the changes
+
+`collectDiff()` is what `exec` review sees, so gaps in it are review gaps. It gathers the diff against the merge base, staged and unstaged changes, and new untracked files, then the recent log.
+
+The limits are deliberate and each one is announced in the output rather than applied silently: `DIFF_MAX_BYTES` 256 KB, `DIFF_MAX_FILES` 60, `DIFF_MAX_NAMES` 400, `LOG_MAX_COMMITS` 200, and for untracked files 24 KB each, 128 KB total, 25 files, text only (`isProbablyText()`).
+
+Two refusals matter. Files that look like secrets (`SECRETISH`) are cut out of the diff with `git diff … -- . ':(exclude,literal)<path>'` and reported as hidden — passing a `.env` to another model is not a review. And when the branch has no merge base with the target, the request is refused instead of dumping the entire history as "the changes".
+
 ### Process model
 
 One path for both synchronous and background calls:
 
 ```
-MCP call ──► job-worker.mjs ──► codex exec ──► the job's JSONL log
-                                                   ▲
-                       followJob() reads the log ──┘ and emits progress
+MCP call ──► job-worker.mjs ──► codex exec | codex app-server ──► the job's JSONL log
+                                                                       ▲
+                                           followJob() reads the log ──┘ and emits progress
 ```
 
 There used to be two paths, both broken. `spawnSync` blocked the MCP server's event loop for the entire Codex run — the server stopped answering `ping` and the client dropped the connection with `MCP error -32000: Connection closed`. `/bin/sh` does not exist on Windows: a background job died before its first line of output and stayed in `unknown` forever.
 
-The worker is portable (`node job-worker.mjs`), timestamps events on receipt (Codex does not send timestamps), writes the exit code atomically, and leaves a note explaining how it ended: `timeout`, `cancelled`, `spawn_failed`. `reconcile()` turns that note into a status — otherwise a cancellation and a timeout would both look like a plain failed run. The process tree is killed via `taskkill /T` on Windows and via the process group on POSIX (`proc.mjs`).
+The worker is portable (`node job-worker.mjs`), timestamps events on receipt (Codex does not send timestamps), writes the exit code atomically, and leaves a note explaining how it ended: `timeout`, `cancelled`, `spawn_failed`, `prompt_failed`, `app_server_failed`. `reconcile()` turns that note into a status — otherwise a cancellation and a timeout would both look like a plain failed run. The process tree is killed via `taskkill /T` on Windows and via the process group on POSIX (`proc.mjs`), and `SIGTERM` escalates to `SIGKILL` after 3 s: a process that ignores the soft signal kept spending quota and editing files after the cancellation.
+
+Order matters at both ends. The job record is written **before** `spawn`; the reverse order left a Codex process nobody knew about — invisible to accounting and to cancellation — so a failure to record it now kills the child. On completion the note and the exit code are published from inside `out.end(callback)`, after the log stream has flushed: published earlier, a reader saw a finished job with a truncated log. The worker listens for `close`, not `exit` — `exit` fires while the pipes are still draining.
+
+The job log is capped at 32 MB; on overflow one `worker_log_truncated` line is appended and nothing after it is written, so a runaway Codex cannot fill the disk.
 
 ### Talking to a model
 
@@ -139,17 +181,27 @@ running ──► done | failed | cancelled | timeout | unknown
 
 Terminal states are immutable. This isn't decoration: `cancelJob()` used to write `cancelled`, and a later `child.on("exit")` would overwrite it with `done` — a cancelled job looked like a successful one.
 
-The source of truth for completion is an **exit-code file**, not an event in the parent process. Jobs launch through `/bin/sh`, which redirects output and atomically writes `$?` to a separate file:
+The source of truth for completion is an **exit-code file**, not an event in the parent process. The worker writes it atomically (temp file + rename) after the log has flushed. This buys three things the `exit` handler never had: the exit code survives an MCP server restart, no descriptors leak (the parent spawns with `stdio: ignore` and detaches), and there is no race with cancellation.
 
-```
-sh -c 'BIN="$1"; PROMPT="$2"; OUT="$3"; CODE="$4"; shift 4;
-       "$BIN" "$@" < "$PROMPT" >> "$OUT" 2>&1;
-       printf %s "$?" > "$CODE.tmp" && mv "$CODE.tmp" "$CODE"'
-```
-
-Paths and the prompt are passed as positional arguments rather than interpolated into a command string, so shell injection is impossible. This buys three things the `exit` handler never had: the exit code survives an MCP server restart, file descriptors don't leak (`sh` does the redirect; the parent opens `stdio: ignore`), and there's no race with cancellation.
+Everything the worker needs travels in a `.spec` file — binary, arguments, paths, backend, timeout — rather than in a command string. Nothing is interpolated into a shell; there is no shell.
 
 A process that vanishes without writing an exit code gets `unknown`, not `done`: treating the unknown as success is the worst available option.
+
+### Is the job actually alive
+
+A PID alone is not proof: numbers get reused, and after a reboot someone else's process answers to it — the job looked alive, and the safety-net `killTree` would have killed a stranger. The worker touches an `.alive` file every 5 s; a mark younger than 30 s means our process (with a 15 s startup grace). Jobs from older versions have no mark, so for them the old rule stands — PID plus age — otherwise every job that survived an update would go dead at once.
+
+`liveJobs()` counts **processes, not statuses**. Cancellation marks a job terminal immediately while the worker is still running and still spending quota; trusting the status would let one `codex_cancel` bypass the parallel limit. `reconcile()` kills a leftover process only when `alive(pid)` confirms one is there.
+
+### Parallel limit
+
+`max_parallel_jobs` (4 by default, `0` removes it) is global, not per-repository: the ChatGPT quota, memory, and CPU are one resource shared across every project.
+
+The check and the launch must be one operation, so `startJob()` runs under a directory lock (`mkdirSync` is atomic everywhere). A stale lock is removed by **renaming** it, not by `rmdir` + `mkdir`: delete-then-create is two operations, and between them another process takes the lock that the next `rmdir` then removes while it is live. Exactly one process succeeds at renaming an existing directory.
+
+### Job retention
+
+`sweepJobs()` runs from `listJobs()` at most once an hour and touches **terminal jobs only**: it deletes those finished more than 7 days ago and anything past the 200 most recent, across every extension a job owns (`json`, `out`, `prompt`, `spec`, `code`, `note`, `cancel`, `alive`). Without it the data directory grew without bound, and each `.out` is a full log of a Codex run.
 
 ### Job identifiers
 
@@ -209,6 +261,8 @@ If the subcommand is unavailable, it degrades to `model` from `config.toml`, the
 
 JSON-RPC batches are rejected deliberately: they were removed from MCP in revision 2025-06-18, which is what the server advertises.
 
+The shape of an incoming message is checked before its fields are read. `null` and scalars are syntactically valid JSON, and destructuring one threw inside an async `line` handler that nobody catches — the whole server died, taking every in-flight call with it. Now it's `-32600`. A line larger than 16 MB is refused before `JSON.parse`, which would otherwise double the memory an oversized line costs.
+
 `mcp-client.mjs` responds to a nested server's `exit`/`close` by failing all pending requests immediately and keeps the tail of its stderr — without this, a call after the server died hung for the full timeout and the cause was lost.
 
 ---
@@ -219,11 +273,13 @@ JSON-RPC batches are rejected deliberately: they were removed from MCP in revisi
 node tests/regressions.mjs
 ```
 
-27 tests, one per known defect. Real `codex` and `claude` binaries aren't needed: the suite creates its own stubs in a temp directory, driven by environment variables.
+119 tests, one per known defect. Real `codex` and `claude` binaries aren't needed: the suite creates its own stubs in a temp directory, driven by environment variables.
 
-Covered: flag detection, terminal job states, exit code across restarts, descriptor leaks, `job_id` path traversal, tool allowlist bypass, forced read-only, an arbitrary file passed off as an image, path containment, `config.toml` corruption (`$&`, quotes, duplicates, conflicts), non-zero exit handling, file permissions and secret stripping, model catalog degradation, `setup` argument parsing, MCP precedence, version negotiation, parse errors, stack trace leakage, and reaction to a nested server dying.
+Covered: flag detection, terminal job states, exit code across restarts, descriptor leaks, `job_id` path traversal, tool allowlist bypass, forced read-only, an arbitrary file passed off as an image, path containment, `config.toml` corruption (`$&`, quotes, duplicates, conflicts), non-zero exit handling, file permissions and secret stripping, model catalog degradation, `setup` argument parsing, MCP precedence, version negotiation, parse errors, a scalar message not killing the server, the incoming line limit, stack trace leakage, reaction to a nested server dying, the parallel limit and its lock, heartbeat liveness against a reused PID, log truncation and Cyrillic split across a read boundary, secrets kept out of the diff, refusal without a merge base, the native review backend, and the fallback boundary that must not spend quota twice.
 
-The descriptor-leak test needs `/proc` and is silently skipped on non-Linux.
+28 of them need POSIX — the stubs are shebang scripts, and `0600` permissions and quotes in filenames mean nothing on Windows. Those are reported as skipped, not as passed. The descriptor-leak test additionally needs `/proc` and is skipped outside Linux.
+
+CI (`.github/workflows/tests.yml`) runs the suite on `ubuntu-latest` and `windows-latest` against Node 20.11 and 22, plus a separate `validate` job for `claude plugin validate . --strict`. The matrix exists because it caught real breakage: 28 tests that had never run on Windows were failing on Linux — English defaults compared against Russian substrings, a stub whose `process.exit` dropped buffered pipe output, and top-level `await` in `node -e`, which is parsed as CommonJS before Node 20.
 
 When adding functionality, add the test in the same file — it's deliberately a single file with no runner, to avoid pulling in dependencies.
 
@@ -245,7 +301,7 @@ This checks the manifest, command and agent frontmatter, and `hooks.json`. `--st
 
 During active development you can drop the field — the commit SHA then becomes the version and updates ship with every push.
 
-The version in `plugin.json` and in `serve({ version })` of both MCP servers must match.
+`plugin.json` is the single source of the version: `version.mjs` reads it, and both MCP servers pass the result into `serve({ version })`. Nothing else needs editing on a bump.
 
 ### Multiple plugins in one repository
 
@@ -274,6 +330,8 @@ The reverse bridge works the same way via `node bridge/mcp-claude.mjs`; it reads
 
 Useful environment variables for tests and debugging: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `CODEX_BRIDGE_CONFIG`, `CODEX_BRIDGE_EXPOSED`, `CODEX_HOME`.
 
+Every plugin setting also arrives as an environment variable, which is how the tests drive them: `CODEX_BRIDGE_LANG`, `CODEX_BRIDGE_MODEL`, `CODEX_BRIDGE_EFFORT`, `CODEX_BRIDGE_REASONING_SUMMARY`, `CODEX_BRIDGE_REVIEW_BACKEND`, `CODEX_BRIDGE_PROGRESS`, `CODEX_BRIDGE_MAX_PARALLEL_JOBS`, `CODEX_BRIDGE_JOB_TIMEOUT_MIN`, `CODEX_BRIDGE_IMAGE_DIR`, `CODEX_BRIDGE_IMAGE_TIMEOUT_MIN`, `CODEX_BRIDGE_BYPASS_SANDBOX`.
+
 ---
 
 ## Unverified assumptions
@@ -284,6 +342,8 @@ An honest list of what has never been checked against live binaries:
 2. **The output format of `codex debug models`** is parsed leniently (`parseCatalog()`), but has never been tested against real output.
 3. **The exact `codex exec` flag set** is detected from `--help`; parsing help text with regexes is itself an assumption.
 4. **The behaviour of `claude -p --tools`** was verified from documentation, not against a real binary.
+
+The `codex app-server` protocol is no longer on this list: the method names, the optional `jsonrpc` field, the item shape, and the `thread/tokenUsage/updated` counters were all checked against a live binary.
 
 A first run in a real environment should proceed in order of increasing risk: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
 
