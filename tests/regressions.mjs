@@ -83,6 +83,72 @@ process.exit(1);
   return p;
 }
 
+/** Заглушка app-server: настоящий Codex и сеть тестам не нужны. */
+function fakeAppServer(dir, mode = "complete") {
+  const p = path.join(dir, `fake-app-server-${mode}.mjs`);
+  fs.writeFileSync(
+    p,
+    `import fs from "node:fs";
+import readline from "node:readline";
+const mode = ${JSON.stringify(mode)};
+const log = process.env.FAKE_APP_LOG;
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+const record = (message) => { if (log) fs.appendFileSync(log, JSON.stringify(message) + "\\n"); };
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  record(message);
+  if (message.method === "initialize") {
+    if (mode === "collision") {
+      send({ id: message.id, method: "approval/request", params: { reason: "test" } });
+      return setTimeout(() => send({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp", platformFamily: "unix", platformOs: "linux" } }), 20);
+    }
+    send({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp", platformFamily: "unix", platformOs: "linux" } });
+    return;
+  }
+  if (message.method === "initialized") return;
+  if (message.method === "thread/start") {
+    send({ id: message.id, result: { thread: { id: "thread-1" } } });
+    return;
+  }
+  if (message.method === "review/start") {
+    if (mode === "reject") {
+      send({ id: message.id, error: { code: -32601, message: "review/start unavailable" } });
+      return;
+    }
+    if (mode === "hang") return;
+    if (mode === "delayed") {
+      return setTimeout(() => {
+        send({ id: message.id, result: { reviewThreadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } } });
+        setTimeout(() => {
+          send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "exitedReviewMode", review: "native review result" } } });
+          send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } });
+        }, 20);
+      }, 1_200);
+    }
+    send({ id: message.id, result: { reviewThreadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } } });
+    if (mode === "exit") return setTimeout(() => process.exit(9), 30);
+    if (mode === "fail") {
+      return setTimeout(() => send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "failed", error: { message: "review failed" } } } }), 20);
+    }
+    if (mode === "cancel") return;
+    setTimeout(() => {
+      send({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "mcpToolCall", server: "fake", tool: "read" } } });
+      send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "exitedReviewMode", review: "native review result" } } });
+      send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } });
+    }, 20);
+    return;
+  }
+  if (message.method === "turn/interrupt") {
+    send({ id: message.id, result: {} });
+    send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } } });
+  }
+});
+`,
+    { mode: 0o600 }
+  );
+  return { bin: process.execPath, args: [p] };
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ───────────────────────────────── 1. Флаг --ask-for-approval по capabilities
@@ -1791,6 +1857,214 @@ await t("30d. команды и агенты остаются на англий�
       assert.ok(!cyr.test(src), `${dir}/${f}: остался русский текст — переключателя языка у статических файлов нет`);
     }
   }
+});
+
+// ───────────────────────────────── 31. Нативное ревью через app-server
+
+await t("31a. backend ревью выбирается настройкой, exec остаётся по умолчанию", async () => {
+  delete process.env.CODEX_BRIDGE_REVIEW_BACKEND;
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?rb=${Date.now()}`);
+  assert.equal(core.reviewBackend(), "exec");
+  process.env.CODEX_BRIDGE_REVIEW_BACKEND = "app-server";
+  assert.equal(core.reviewBackend(), "app-server");
+  process.env.CODEX_BRIDGE_REVIEW_BACKEND = "неизвестный";
+  assert.equal(core.reviewBackend(), "exec", "неизвестное значение не откатилось к безопасному backend");
+  delete process.env.CODEX_BRIDGE_REVIEW_BACKEND;
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"));
+  assert.equal(manifest.userConfig.review_backend.default, "exec");
+  const mcp = JSON.parse(fs.readFileSync(path.join(ROOT, ".mcp.json"), "utf8"));
+  assert.equal(mcp.mcpServers.codex.env.CODEX_BRIDGE_REVIEW_BACKEND, "${user_config.review_backend}");
+});
+
+await t("31b. отказ app-server до принятия review/start запускает exec fallback", async () => {
+  const d = fresh("app-fallback");
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?fb=${Date.now()}`);
+  let fallbacks = 0;
+  const r = await app.runAppServerReviewWithFallback(
+    { cwd: d, command: fakeAppServer(d, "reject"), target: { type: "uncommittedChanges" } },
+    async () => ({ backend: "exec", count: ++fallbacks })
+  );
+  assert.deepEqual(r, { backend: "exec", count: 1 });
+});
+
+await t("31c. после принятия review/start exec повторно не запускается", async () => {
+  const d = fresh("app-no-repeat");
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?nr=${Date.now()}`);
+  let fallbacks = 0;
+  await assert.rejects(
+    app.runAppServerReviewWithFallback(
+      { cwd: d, command: fakeAppServer(d, "fail"), target: { type: "uncommittedChanges" } },
+      async () => ({ backend: "exec", count: ++fallbacks })
+    ),
+    (error) => error.reviewAccepted === true && /review failed/.test(error.message)
+  );
+  assert.equal(fallbacks, 0, "после принятого review/start запущен второй расход квоты");
+});
+
+await t("31d. смерть app-server в середине ревью немедленно завершает задачу отказом", async () => {
+  const d = fresh("app-death");
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?death=${Date.now()}`);
+  let fallbacks = 0;
+  const started = Date.now();
+  await assert.rejects(
+    app.runAppServerReviewWithFallback(
+      { cwd: d, command: fakeAppServer(d, "exit"), target: { type: "uncommittedChanges" }, requestTimeoutMs: 5_000 },
+      async () => ({ backend: "exec", count: ++fallbacks })
+    ),
+    (error) => error.reviewAccepted === true && /exited|closed/i.test(error.message)
+  );
+  assert.ok(Date.now() - started < 2_000, "смерть процесса обнаружена только по таймауту");
+  assert.equal(fallbacks, 0);
+});
+
+await t("31e. отмена принятого ревью отправляет turn/interrupt с точными id", async () => {
+  const d = fresh("app-cancel");
+  const log = path.join(d, "rpc.jsonl");
+  process.env.FAKE_APP_LOG = log;
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?cancel=${Date.now()}`);
+  const controller = new AbortController();
+  const r = await app.runAppServerReview({
+    cwd: d,
+    command: fakeAppServer(d, "cancel"),
+    target: { type: "uncommittedChanges" },
+    signal: controller.signal,
+    onAccepted: () => controller.abort(),
+  });
+  delete process.env.FAKE_APP_LOG;
+
+  assert.equal(r.cancelled, true);
+  const messages = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+  const interrupt = messages.find((message) => message.method === "turn/interrupt");
+  assert.deepEqual(interrupt?.params, { threadId: "thread-1", turnId: "turn-1" });
+});
+
+await t("31f. уведомления app-server нормализуются в прежний JSONL-формат", async () => {
+  const ev = await import(`${ROOT_URL}/scripts/codex-events.mjs?app=${Date.now()}`);
+  const review = ev.fromAppServerNotification({
+    method: "item/completed",
+    params: { threadId: "thread-1", turnId: "turn-1", item: { type: "exitedReviewMode", review: "native result" } },
+  });
+  const tool = ev.fromAppServerNotification({
+    method: "item/started",
+    params: { threadId: "thread-1", turnId: "turn-1", item: { type: "mcpToolCall", server: "fake", tool: "read" } },
+  });
+  const log = [review, { type: "turn.completed" }].map(JSON.stringify).join("\n");
+  assert.equal(ev.extractOutput(log).text, "native result");
+  assert.match(ev.normalize(tool).title, /fake\/read/);
+});
+
+await t("31g. app-server ревью проходит через detached worker и читается после перезапуска MCP", async () => {
+  const d = fresh("app-worker");
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const command = fakeAppServer(d, "complete");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?aw=${Date.now()}`);
+  const job = core.startJob({
+    mode: "review",
+    backend: "app-server",
+    appServerCommand: command,
+    reviewTarget: { type: "uncommittedChanges" },
+    prompt: "exec fallback prompt",
+    cwd: d,
+  });
+
+  const deadline = Date.now() + 5_000;
+  while (core.resolveJob(job.id, d)?.status === "running" && Date.now() < deadline) await sleep(50);
+  const restarted = await import(`${ROOT_URL}/scripts/codex-core.mjs?aw2=${Date.now()}`);
+  const saved = restarted.resolveJob(job.id, d);
+  assert.equal(saved.status, "done");
+  assert.equal(saved.backend, "app-server");
+  assert.equal(restarted.jobAnswer(job.id), "native review result");
+  assert.equal(restarted.jobProgress(job.id).finished, true);
+});
+
+await t("31h. codex_cancel доходит через detached worker до turn/interrupt", async () => {
+  const d = fresh("app-worker-cancel");
+  const log = path.join(d, "rpc.jsonl");
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE_APP_LOG = log;
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?ac=${Date.now()}`);
+  const job = core.startJob({
+    mode: "review",
+    backend: "app-server",
+    appServerCommand: fakeAppServer(d, "cancel"),
+    reviewTarget: { type: "uncommittedChanges" },
+    prompt: "exec fallback prompt",
+    cwd: d,
+  });
+
+  const acceptedDeadline = Date.now() + 5_000;
+  while (
+    (!fs.existsSync(log) || !fs.readFileSync(log, "utf8").includes('"method":"review/start"')) &&
+    Date.now() < acceptedDeadline
+  ) await sleep(50);
+  assert.equal(core.cancelJob(job.id).ok, true);
+
+  const interruptDeadline = Date.now() + 5_000;
+  while (
+    (!fs.existsSync(log) || !fs.readFileSync(log, "utf8").includes('"method":"turn/interrupt"')) &&
+    Date.now() < interruptDeadline
+  ) await sleep(50);
+  delete process.env.FAKE_APP_LOG;
+
+  const messages = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+  const interrupt = messages.find((message) => message.method === "turn/interrupt");
+  assert.deepEqual(interrupt?.params, { threadId: "thread-1", turnId: "turn-1" });
+  assert.equal(core.resolveJob(job.id, d).status, "cancelled");
+});
+
+await t("31i. серверный JSON-RPC-запрос не принимается за ответ с совпавшим id", async () => {
+  const d = fresh("app-id-collision");
+  const log = path.join(d, "rpc.jsonl");
+  process.env.FAKE_APP_LOG = log;
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?id=${Date.now()}`);
+  const r = await app.runAppServerReview({
+    cwd: d,
+    command: fakeAppServer(d, "collision"),
+    target: { type: "uncommittedChanges" },
+  });
+  delete process.env.FAKE_APP_LOG;
+
+  assert.equal(r.output, "native review result");
+  const messages = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+  const refusal = messages.find((message) => message.id === 1 && message.error);
+  assert.equal(refusal?.error?.code, -32601);
+});
+
+await t("31j. медленный ответ review/start не вызывает неоднозначный fallback по таймауту", async () => {
+  const d = fresh("app-delayed-review");
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?slow=${Date.now()}`);
+  let fallbacks = 0;
+  const r = await app.runAppServerReviewWithFallback(
+    {
+      cwd: d,
+      command: fakeAppServer(d, "delayed"),
+      target: { type: "uncommittedChanges" },
+      requestTimeoutMs: 1_000,
+    },
+    async () => ({ fallback: ++fallbacks })
+  );
+  assert.equal(r.output, "native review result");
+  assert.equal(fallbacks, 0);
+});
+
+await t("31k. отмена ожидающего review/start не запускает exec fallback", async () => {
+  const d = fresh("app-cancel-pending");
+  const app = await import(`${ROOT_URL}/scripts/app-server.mjs?pending=${Date.now()}`);
+  const controller = new AbortController();
+  let fallbacks = 0;
+  setTimeout(() => controller.abort(), 50);
+  const r = await app.runAppServerReviewWithFallback(
+    {
+      cwd: d,
+      command: fakeAppServer(d, "hang"),
+      target: { type: "uncommittedChanges" },
+      signal: controller.signal,
+    },
+    async () => ({ fallback: ++fallbacks })
+  );
+  assert.equal(r.cancelled, true);
+  assert.equal(fallbacks, 0);
 });
 
 // ───────────────────────────────── отчёт

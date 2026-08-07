@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0
+
+Нативный reviewer Codex как второй backend ревью. Проверено на живом
+CLI 0.146.0: `review/start` принимает `threadId`, `target` и `delivery`,
+отвечает `turn.id` и `reviewThreadId`.
+
+
+- У `codex_review` появился второй backend — встроенный reviewer Codex через
+  `codex app-server` и JSON-RPC `review/start`. Прежний `codex exec` остаётся
+  основным и используется по умолчанию; новый путь включается только настройкой
+  `review_backend: app-server`.
+- `uncommittedChanges`, `baseBranch` и `custom` ReviewTarget строятся без
+  вложения git diff в запрос к нативному reviewer. `focus` сохраняется через
+  custom-цель, а обычное ревью рабочего дерева и ветки использует структурные
+  цели протокола.
+- Fallback на `codex exec` разрешён лишь до успешного ответа на `review/start`.
+  После принятия turn разрыв соединения считается отказом: второй reviewer не
+  запускается и квота ChatGPT повторно не расходуется.
+- App-server работает внутри прежнего detached worker и пишет нормализованный
+  JSONL-журнал. Поэтому `codex_status`, `codex_progress` и `codex_result`
+  одинаково видят оба backend, а задача продолжает жить после перезапуска
+  MCP-сервера.
+- `codex_cancel` передаёт app-server точные `threadId` и `turnId` методом
+  `turn/interrupt`. На Windows worker больше не уничтожается через `taskkill /F`
+  до того, как протокольная отмена успеет уйти.
+
 ## 0.6.0
 
 Английский стал языком по умолчанию, русский включается настройкой.

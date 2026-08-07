@@ -64,6 +64,23 @@ const MESSAGES = {
     worker_spawn_failed: (error) => `could not start Codex: ${error}`,
     worker_prompt_read_failed: (error) => `job-worker: could not read the prompt: ${error}\n`,
     worker_timeout: (seconds) => `task timed out after ${seconds}s`,
+    app_server_spawn_failed: (error) => `could not start codex app-server: ${error}`,
+    app_server_signal: (signal) => `signal ${signal}`,
+    app_server_code: (code) => `code ${code}`,
+    app_server_exited: (how) => `codex app-server exited (${how})`,
+    app_server_closed: "codex app-server connection is closed",
+    app_server_request_timeout: (method) => `codex app-server timed out on ${method}`,
+    app_server_bad_json: "codex app-server returned an invalid JSONL line",
+    app_server_rpc_failed: (method) => `codex app-server rejected ${method}`,
+    app_server_server_request_unsupported: (method) => `Unsupported app-server request: ${method}`,
+    app_server_custom_base_focus: (base, focus) =>
+      `Review the changes against base branch ${base}. Focus especially on: ${focus}`,
+    app_server_custom_focus: (focus) => `Review the uncommitted changes. Focus especially on: ${focus}`,
+    app_server_missing_thread: "codex app-server did not return a thread id",
+    app_server_missing_turn: "codex app-server accepted review/start without a turn id",
+    app_server_cancelled_before_accept: "codex app-server review was cancelled before review/start returned",
+    app_server_review_failed: (status) => `codex app-server review ended with status ${status}`,
+    app_server_fallback: (error) => `codex app-server was unavailable before review/start was accepted; falling back to codex exec: ${error}`,
 
     setup_bad_args: (error) => `Invalid arguments: ${error}`,
     setup_usage:
@@ -204,6 +221,24 @@ const MESSAGES = {
     worker_spawn_failed: (error) => `не удалось запустить Codex: ${error}`,
     worker_prompt_read_failed: (error) => `job-worker: промпт не прочитан: ${error}\n`,
     worker_timeout: (seconds) => `таймаут задачи: ${seconds}с`,
+    app_server_spawn_failed: (error) => `не удалось запустить codex app-server: ${error}`,
+    app_server_signal: (signal) => `сигнал ${signal}`,
+    app_server_code: (code) => `код ${code}`,
+    app_server_exited: (how) => `codex app-server завершился (${how})`,
+    app_server_closed: "соединение с codex app-server закрыто",
+    app_server_request_timeout: (method) => `таймаут codex app-server на ${method}`,
+    app_server_bad_json: "codex app-server вернул некорректную строку JSONL",
+    app_server_rpc_failed: (method) => `codex app-server отклонил ${method}`,
+    app_server_server_request_unsupported: (method) => `Неподдерживаемый запрос app-server: ${method}`,
+    app_server_custom_base_focus: (base, focus) =>
+      `Проведи ревью изменений относительно базовой ветки ${base}. Особое внимание: ${focus}`,
+    app_server_custom_focus: (focus) => `Проведи ревью незакоммиченных изменений. Особое внимание: ${focus}`,
+    app_server_missing_thread: "codex app-server не вернул идентификатор треда",
+    app_server_missing_turn: "codex app-server принял review/start без идентификатора turn",
+    app_server_cancelled_before_accept: "ревью codex app-server отменено до ответа review/start",
+    app_server_review_failed: (status) => `ревью codex app-server завершилось со статусом ${status}`,
+    app_server_fallback: (error) =>
+      `codex app-server отказал до принятия review/start; используется запасной codex exec: ${error}`,
 
     setup_bad_args: (error) => `Неверные аргументы: ${error}`,
     setup_usage:

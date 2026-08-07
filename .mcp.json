@@ -6,6 +6,7 @@
         "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-codex.mjs"
       ],
       "env": {
+        "CODEX_BRIDGE_REVIEW_BACKEND": "${user_config.review_backend}",
         "CODEX_BRIDGE_LANG": "${user_config.language}",
         "CODEX_BRIDGE_MODEL": "${user_config.default_model}",
         "CODEX_BRIDGE_EFFORT": "${user_config.default_effort}",

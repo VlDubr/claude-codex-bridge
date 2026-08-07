@@ -284,6 +284,11 @@ export function bypassSandboxEnabled() {
   return v === "true" || v === "1" || v === "yes";
 }
 
+/** Нативный backend включается только точным явным значением. */
+export function reviewBackend() {
+  return envClean("CODEX_BRIDGE_REVIEW_BACKEND") === "app-server" ? "app-server" : "exec";
+}
+
 const SANDBOX_BY_MODE = {
   ask: "read-only",
   review: "read-only",
@@ -791,11 +796,13 @@ function startJobUnlocked(opts) {
   const id = `job-${crypto.randomBytes(4).toString("hex")}`;
   const cwd = opts.cwd || process.cwd();
   const prompt = opts.prompt || buildPrompt({ ...opts, cwd });
+  const backend = opts.mode === "review" ? opts.backend || reviewBackend() : "exec";
 
   const promptFile = jobPath(id, "prompt");
   const outFile = jobPath(id, "out");
   const codeFile = jobPath(id, "code");
   const noteFile = jobPath(id, "note");
+  const cancelFile = jobPath(id, "cancel");
   const specFile = jobPath(id, "spec");
   writeFileSecure(promptFile, prompt);
 
@@ -809,7 +816,14 @@ function startJobUnlocked(opts) {
       outFile,
       codeFile,
       noteFile,
+      cancelFile,
       cwd,
+      backend,
+      reviewTarget: opts.reviewTarget || null,
+      appServerCommand: opts.appServerCommand || null,
+      model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
+      effort: opts.effort || envClean("CODEX_BRIDGE_EFFORT") || null,
+      reasoningSummary: opts.reasoningSummary || envClean("CODEX_BRIDGE_REASONING_SUMMARY") || null,
       timeoutMs: Number(opts.jobTimeoutMs) || jobTimeoutMs(),
     })
   );
@@ -827,6 +841,7 @@ function startJobUnlocked(opts) {
     id,
     pid: child.pid ?? null,
     mode: opts.mode,
+    backend,
     model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
     effort: opts.effort || envClean("CODEX_BRIDGE_EFFORT") || null,
     label: String(opts.task || opts.focus || opts.question || opts.message || opts.mode || "").slice(0, 120),
@@ -980,7 +995,13 @@ export function cancelJob(id) {
   if (!job) return { ok: false, error: C().job_not_found(id) };
   if (TERMINAL.has(job.status)) return { ok: true, job, note: C().already_status(job.status) };
 
-  killTree(job.pid);
+  if (job.backend === "app-server") {
+    // Воркер владеет stdio-соединением и только он может послать
+    // turn/interrupt. Файл переживает перезапуск MCP-сервера.
+    writeFileSecure(jobPath(id, "cancel"), new Date().toISOString());
+  } else {
+    killTree(job.pid);
+  }
   job.status = "cancelled";
   job.finishedAt = new Date().toISOString();
   writeJob(job); // cancelled терминален — reconcile его больше не тронет

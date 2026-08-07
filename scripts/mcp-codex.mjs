@@ -20,9 +20,11 @@ import {
   cancelJob,
   humanAge,
   envClean,
+  reviewBackend,
   repoKey,
   buildPrompt,
 } from "./codex-core.mjs";
+import { appServerReviewTarget } from "./app-server.mjs";
 import { describe } from "./codex-events.mjs";
 import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
 import { readChat, writeChat, listChats, deleteChat, withChatLock, isValidSlug } from "./chat-store.mjs";
@@ -472,6 +474,7 @@ async function dispatchTool(name, args, ctx = {}) {
     case "codex_review":
     case "codex_challenge": {
       const mode = name === "codex_review" ? "review" : "challenge";
+      const backend = mode === "review" ? reviewBackend() : "exec";
       const background = args.background !== false;
       // Сбор контекста теперь отказывает явно: не репозиторий, несуществующая
       // база, сбойный git. Раньше любая из этих причин давала пустой диф и
@@ -484,7 +487,15 @@ async function dispatchTool(name, args, ctx = {}) {
       } catch (e) {
         return err(U().diff_failed(e?.message || e));
       }
-      const spec = { mode, cwd, ...args, ...applyDefaults(args, cwd), prompt };
+      const spec = {
+        mode,
+        cwd,
+        ...args,
+        ...applyDefaults(args, cwd),
+        prompt,
+        backend,
+        reviewTarget: backend === "app-server" ? appServerReviewTarget(args) : null,
+      };
       if (!background) {
         const r = await runJob(spec, { waitMs: 480_000, onEvent: notifier(ctx), signal: ctx.signal });
         if (r.aborted) return text(U().cancelled(r.job.id));

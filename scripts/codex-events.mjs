@@ -31,6 +31,22 @@ export function parseStream(text) {
     .filter(Boolean);
 }
 
+/**
+ * Уведомление app-server → тот же объект события, который пишет `exec --json`.
+ * Имена полей item остаются исходными и разбираются ниже терпимо: так журнал
+ * не заводит второй формат, а UI продолжает работать через одну normalize().
+ */
+export function fromAppServerNotification(notification) {
+  if (!notification || typeof notification.method !== "string") return null;
+  const type = notification.method.replaceAll("/", ".");
+  const params = notification.params && typeof notification.params === "object" ? notification.params : {};
+  if (!/^(thread|turn|item)\.|^error$/.test(type)) return null;
+  if (type === "turn.completed" && params.turn?.status === "failed") {
+    return { ...params, type: "turn.failed", error: params.turn.error || params.error || null };
+  }
+  return { ...params, type };
+}
+
 // Воркер ведёт один журнал на задачу, но stdout и stderr в нём надо различать:
 // без --json Codex печатает ответ обычным текстом, и его собственная
 // диагностика подмешивалась в ответ модели. Поэтому строки, не являющиеся
@@ -135,25 +151,30 @@ export function normalize(e) {
 
   switch (kind) {
     case "reasoning": {
-      const textRaw = String(it.text || it.summary || "").trim();
+      const summary = Array.isArray(it.summary)
+        ? it.summary.map((part) => (typeof part === "string" ? part : part?.text || "")).filter(Boolean).join("\n")
+        : it.summary;
+      const textRaw = String(it.text || summary || "").trim();
       if (!textRaw) return null;
       // Сводка reasoning — самая ценная часть ленты, поэтому в detail она
       // уходит целиком: раньше от неё оставались первые 100 символов.
       return at({ kind: "reasoning", title: L().reasoning(clip(firstLine(textRaw), 120)), detail: detailOf(textRaw) });
     }
-    case "command_execution": {
+    case "command_execution":
+    case "commandExecution": {
       const cmd = cmdOf(it);
       if (started) return at({ kind: "command", title: L().running(clip(cmd, 80)), detail: detailOf(cmd) });
-      const code = it.exit_code;
+      const code = it.exit_code ?? it.exitCode;
       const bad = !(code === 0 || code === undefined || code === null);
       return at({
         kind: "command",
         title: L().ran(clip(cmd, 80), bad ? code : null),
-        detail: detailOf(it.aggregated_output || it.output || cmd),
+        detail: detailOf(it.aggregated_output || it.aggregatedOutput || it.output || cmd),
         exitCode: code ?? null,
       });
     }
-    case "file_change": {
+    case "file_change":
+    case "fileChange": {
       const changes = it.changes || [];
       const files = changes.map((c) => c.path || c.file).filter(Boolean);
       return at({
@@ -163,7 +184,8 @@ export function normalize(e) {
         files,
       });
     }
-    case "mcp_tool_call": {
+    case "mcp_tool_call":
+    case "mcpToolCall": {
       const name = `${it.server ? `${it.server}/` : ""}${it.tool || it.name || "?"}`;
       return at({
         kind: "mcp",
@@ -175,8 +197,10 @@ export function normalize(e) {
       });
     }
     case "web_search":
+    case "webSearch":
       return at({ kind: "web", title: L().web_search(clip(it.query || "", 80)), detail: detailOf(it.query) });
-    case "todo_list": {
+    case "todo_list":
+    case "todoList": {
       const items = it.items || it.todos || [];
       if (!items.length) return null;
       const doneCount = items.filter((x) => x.completed || x.status === "completed").length;
@@ -188,16 +212,24 @@ export function normalize(e) {
         ),
       });
     }
-    case "collab_tool_call": {
+    case "collab_tool_call":
+    case "collabToolCall": {
       const name = it.tool || it.name || it.agent || L().subagent_default;
       return at({ kind: "mcp", title: L().subagent(started, name), detail: null });
     }
-    case "agent_message": {
+    case "agent_message":
+    case "agentMessage": {
       if (started) return at({ kind: "status", title: L().composing, detail: null });
       const textRaw = String(it.text || "").trim();
       if (!textRaw) return null;
       // Промежуточные сообщения — это реплики по ходу работы; какое из них
       // финальное, знает только конец потока (см. finalMessage).
+      return at({ kind: "message", title: L().says(clip(firstLine(textRaw), 120)), detail: detailOf(textRaw) });
+    }
+    case "exitedReviewMode": {
+      if (started) return at({ kind: "status", title: L().composing, detail: null });
+      const textRaw = String(it.review || "").trim();
+      if (!textRaw) return null;
       return at({ kind: "message", title: L().says(clip(firstLine(textRaw), 120)), detail: detailOf(textRaw) });
     }
     case "error": {
@@ -242,8 +274,12 @@ export function finalMessage(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     const it = e.item;
-    if (e.type === "item.completed" && it && (it.type || it.item_type) === "agent_message") {
+    const kind = it?.type || it?.item_type;
+    if (e.type === "item.completed" && (kind === "agent_message" || kind === "agentMessage")) {
       return String(it.text || "").trim();
+    }
+    if (e.type === "item.completed" && kind === "exitedReviewMode") {
+      return String(it.review || "").trim();
     }
   }
   return null;

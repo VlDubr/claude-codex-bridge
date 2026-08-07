@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",
@@ -21,6 +21,13 @@
   ],
   "defaultEnabled": false,
   "userConfig": {
+    "review_backend": {
+      "type": "string",
+      "title": "Code review backend",
+      "description": "exec (default) uses the established codex exec review path. app-server explicitly enables Codex's native review/start reviewer; it falls back to exec only if review/start was not accepted.",
+      "default": "exec",
+      "required": false
+    },
     "language": {
       "type": "string",
       "title": "Язык описаний, сообщений и промптов",
