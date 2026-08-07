@@ -110,11 +110,111 @@ export function codexBinary() {
   return envClean("CODEX_BIN") || "codex";
 }
 
+const CODEX_PROBE_TIMEOUT_MS = 4_000;
+const CODEX_PROBE_TTL_MS = 60_000;
+
+let probePromise = null;
+let probeCache = null;
+
+function spawnTimedOut(result) {
+  return result.error?.code === "ETIMEDOUT" || result.error?.errno === "ETIMEDOUT";
+}
+
+function runProbe(bin, args) {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer;
+    let child;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ stdout, stderr, ...result });
+    };
+
+    try {
+      child = spawn(bin, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      finish({ error, status: null });
+      return;
+    }
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => finish({ error, status: null }));
+    child.on("close", (status, signal) => finish({ error: null, status, signal }));
+
+    timer = setTimeout(() => {
+      if (settled) return;
+      killTree(child.pid);
+      finish({ error: null, status: null, timedOut: true });
+    }, CODEX_PROBE_TIMEOUT_MS);
+  });
+}
+
+export async function probeCodex({ force = false } = {}) {
+  if (probePromise) return probePromise;
+
+  const now = Date.now();
+  if (!force && probeCache && now - probeCache.at < CODEX_PROBE_TTL_MS) {
+    return probeCache.result;
+  }
+
+  const bin = codexBinary();
+  const current = (async () => {
+    const v = await runProbe(bin, ["--version"]);
+    let result;
+    if (v.timedOut) {
+      result = { ok: false, reason: "probe_timeout", bin };
+    } else if (v.error) {
+      result = { ok: false, reason: "not_installed", bin };
+    } else {
+      const auth = await runProbe(bin, ["login", "status"]);
+      if (auth.timedOut) {
+        result = { ok: false, reason: "probe_timeout", bin };
+      } else {
+        const textOut = `${auth.stdout || ""}${auth.stderr || ""}`;
+        const loggedIn = auth.status === 0 && !/not logged in|no credentials/i.test(textOut);
+        result = {
+          ok: loggedIn,
+          reason: loggedIn ? null : "not_logged_in",
+          bin,
+          version: (v.stdout || "").trim(),
+          authInfo: textOut.trim(),
+        };
+      }
+    }
+    probeCache = { at: Date.now(), result };
+    return result;
+  })();
+
+  probePromise = current;
+  try {
+    return await current;
+  } finally {
+    if (probePromise === current) probePromise = null;
+  }
+}
+
 export function checkCodex() {
   const bin = codexBinary();
-  const v = spawnSync(bin, ["--version"], { encoding: "utf8" });
+  const v = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: CODEX_PROBE_TIMEOUT_MS });
+  if (spawnTimedOut(v)) return { ok: false, reason: "probe_timeout", bin };
   if (v.error) return { ok: false, reason: "not_installed", bin };
-  const auth = spawnSync(bin, ["login", "status"], { encoding: "utf8" });
+  const auth = spawnSync(bin, ["login", "status"], { encoding: "utf8", timeout: CODEX_PROBE_TIMEOUT_MS });
+  if (spawnTimedOut(auth)) return { ok: false, reason: "probe_timeout", bin };
   const textOut = `${auth.stdout || ""}${auth.stderr || ""}`;
   const loggedIn = auth.status === 0 && !/not logged in|no credentials/i.test(textOut);
   return {

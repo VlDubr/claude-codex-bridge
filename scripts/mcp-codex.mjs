@@ -5,7 +5,7 @@
 import { serve, text, fail as err } from "./mcp-lib.mjs";
 import { pluginVersion } from "./version.mjs";
 import {
-  checkCodex,
+  probeCodex,
   runJob,
   startJob,
   followJob,
@@ -220,13 +220,25 @@ const TOOLS = [
   },
 ];
 
-function guard() {
-  const c = checkCodex();
+const CLI_TOOLS = new Set([
+  "codex_ask",
+  "codex_chat",
+  "codex_delegate",
+  "codex_review",
+  "codex_challenge",
+  "codex_models",
+]);
+
+async function guard() {
+  const c = await probeCodex();
   if (c.reason === "not_installed") {
     return "Codex CLI не найден. Установи: npm install -g @openai/codex — затем codex login.";
   }
   if (c.reason === "not_logged_in") {
     return "Codex установлен, но не авторизован. Выполни в терминале: codex login (вход через ChatGPT-аккаунт по OAuth).";
+  }
+  if (c.reason === "probe_timeout") {
+    return "Проверка готовности Codex не завершилась за отведённое время. Сам Codex при этом может быть исправен. Проверь вручную: codex login status.";
   }
   return null;
 }
@@ -295,8 +307,10 @@ function applyDefaults(args, cwd) {
 }
 
 async function handleTool(name, args, ctx = {}) {
-  const problem = guard();
-  if (problem) return err(problem);
+  if (CLI_TOOLS.has(name)) {
+    const problem = await guard();
+    if (problem) return err(problem);
+  }
   const cwd = envClean("CODEX_BRIDGE_CWD") || envClean("CLAUDE_PROJECT_DIR") || process.cwd();
 
   if (args.effort) {

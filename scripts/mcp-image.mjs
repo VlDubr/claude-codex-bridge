@@ -4,7 +4,7 @@
 import path from "node:path";
 import { serve, text, fail } from "./mcp-lib.mjs";
 import { pluginVersion } from "./version.mjs";
-import { checkCodex, envClean } from "./codex-core.mjs";
+import { probeCodex, envClean } from "./codex-core.mjs";
 import {
   generateImage,
   validate,
@@ -79,11 +79,15 @@ async function handle(name, args) {
 
   if (name !== "image_generate") return fail(`Неизвестный инструмент: ${name}`);
 
-  const c = checkCodex();
+  const c = await probeCodex();
   if (c.reason === "not_installed")
     return fail("Codex CLI не найден. Установи: npm install -g @openai/codex — затем codex login.");
   if (c.reason === "not_logged_in")
     return fail("Codex не авторизован. Выполни в терминале: codex login (вход через аккаунт ChatGPT).");
+  if (c.reason === "probe_timeout")
+    return fail(
+      "Проверка готовности Codex не завершилась за отведённое время. Сам Codex при этом может быть исправен. Проверь вручную: codex login status."
+    );
 
   const cwd = root();
   const r = generateImage({ ...args, cwd });

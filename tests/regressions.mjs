@@ -1287,9 +1287,149 @@ await t("22c. чужой вывод не утекает в ленту целик
   assert.ok(big.detail.length < 5000, `вывод команды не усечён: ${big.detail.length}`);
 });
 
-// ───────────────────────────────── 23. Версия из единственного источника
+// ───────────────────────────────── 23. Обратный мост: асинхронность и отмена
 
-await t("23. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
+/** Заглушка claude: спит, отмечается в файле и печатает ответ. */
+function fakeClaude(dir, { sleepMs = 0, marker = null } = {}) {
+  const p = path.join(dir, "claude");
+  fs.writeFileSync(
+    p,
+    `#!/usr/bin/env node
+const fs=require("fs");
+${marker ? `fs.writeFileSync(${JSON.stringify(marker)}+"."+process.pid,"started");` : ""}
+setTimeout(()=>{${marker ? `fs.writeFileSync(${JSON.stringify(marker)}+"."+process.pid,"finished");` : ""}console.log("ответ claude");process.exit(0)},${sleepMs});`,
+    { mode: 0o755 }
+  );
+  return p;
+}
+
+await tExec("23a. вызовы обратного моста идут параллельно, а не по очереди", async () => {
+  const d = fresh("reverse-parallel");
+  const exposed = path.join(d, "exposed.json");
+  fs.writeFileSync(exposed, JSON.stringify({ servers: {}, allow_task: false }));
+
+  const started = Date.now();
+  const res = await talk(
+    `${ROOT}/bridge/mcp-claude.mjs`,
+    [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "claude_ask", arguments: { question: "a" } } },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "claude_ask", arguments: { question: "b" } } },
+    ],
+    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1500 }), CODEX_BRIDGE_EXPOSED: exposed }
+  );
+  const elapsed = Date.now() - started;
+
+  assert.ok(res.find((m) => m.id === 2)?.result, "первый вызов без ответа");
+  assert.ok(res.find((m) => m.id === 3)?.result, "второй вызов без ответа");
+  // Последовательный spawnSync дал бы не меньше 3000 мс на два вызова по 1500.
+  assert.ok(elapsed < 2600, `вызовы сериализовались: ${elapsed} мс на два по 1500`);
+});
+
+await tExec("23b. ping доходит, пока обратный мост занят вызовом", async () => {
+  const d = fresh("reverse-ping");
+  const exposed = path.join(d, "exposed.json");
+  fs.writeFileSync(exposed, JSON.stringify({ servers: {}, allow_task: false }));
+
+  const res = await talk(
+    `${ROOT}/bridge/mcp-claude.mjs`,
+    [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "claude_ask", arguments: { question: "a" } } },
+      { jsonrpc: "2.0", id: 3, method: "ping" },
+    ],
+    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1200 }), CODEX_BRIDGE_EXPOSED: exposed }
+  );
+
+  const ping = res.findIndex((m) => m.id === 3);
+  const call = res.findIndex((m) => m.id === 2);
+  assert.ok(ping >= 0, "на ping не ответили — event loop заблокирован");
+  assert.ok(ping < call, "ping ответил только после вызова: сервер был заблокирован");
+});
+
+await tExec("23c. отмена одного вызова не трогает другой", async () => {
+  const d = fresh("reverse-cancel");
+  const exposed = path.join(d, "exposed.json");
+  fs.writeFileSync(exposed, JSON.stringify({ servers: {}, allow_task: false }));
+  const marker = path.join(d, "mark");
+
+  const res = await talk(
+    `${ROOT}/bridge/mcp-claude.mjs`,
+    [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "claude_ask", arguments: { question: "a" } } },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "claude_ask", arguments: { question: "b" } } },
+      { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2 } },
+    ],
+    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1500, marker }), CODEX_BRIDGE_EXPOSED: exposed }
+  );
+
+  assert.ok(!res.some((m) => m.id === 2), "на отменённый вызов пришёл ответ");
+  assert.ok(res.find((m) => m.id === 3)?.result, "отмена унесла с собой соседний вызов");
+
+  const marks = fs.readdirSync(d).filter((f) => f.startsWith("mark."));
+  const finished = marks.filter((f) => fs.readFileSync(path.join(d, f), "utf8") === "finished");
+  assert.equal(finished.length, 1, `дожить должен ровно один процесс, дожило ${finished.length}`);
+});
+
+// ───────────────────────────────── 24. Проверка готовности Codex
+
+await t("24a. параллельные проверки готовности не плодят процессов", async () => {
+  const d = fresh("probe-single");
+  process.env.CODEX_BIN = process.execPath; // node: --version отвечает мгновенно
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?pr=${Date.now()}`);
+
+  const [a, b] = await Promise.all([core.probeCodex(), core.probeCodex()]);
+  assert.strictEqual(a, b, "две параллельные проверки запустили две разные");
+
+  const cached = await core.probeCodex();
+  assert.strictEqual(cached, a, "результат не кэшируется, проверка идёт на каждый вызов");
+
+  const forced = await core.probeCodex({ force: true });
+  assert.notStrictEqual(forced, a, "force не обходит кэш");
+  delete process.env.CODEX_BIN;
+});
+
+await tExec("24b. зависшая проверка даёт probe_timeout, а не «не установлен»", async () => {
+  const d = fresh("probe-hang");
+  const bin = path.join(d, "codex");
+  fs.writeFileSync(bin, "#!/usr/bin/env node\nsetTimeout(()=>process.exit(0),60000);\n", { mode: 0o755 });
+  process.env.CODEX_BIN = bin;
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?ph=${Date.now()}`);
+
+  const started = Date.now();
+  const r = await core.probeCodex();
+  const elapsed = Date.now() - started;
+
+  assert.equal(r.reason, "probe_timeout", `зависший бинарь опознан как ${r.reason}`);
+  assert.ok(elapsed < 8000, `проверка висела ${elapsed} мс вместо таймаута`);
+  delete process.env.CODEX_BIN;
+});
+
+await t("24c. инструментам без запуска Codex проверка готовности не нужна", async () => {
+  const d = fresh("probe-skip");
+  const res = await talk(
+    `${ROOT}/scripts/mcp-codex.mjs`,
+    [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "codex_status", arguments: {} } },
+    ],
+    { CODEX_BIN: path.join(d, "codex-которого-нет"), CLAUDE_PLUGIN_DATA: path.join(d, "data") }
+  );
+
+  const call = res.find((m) => m.id === 2);
+  assert.ok(call?.result, "codex_status не ответил");
+  assert.ok(
+    !/не найден/.test(call.result.content[0].text),
+    "codex_status требует установленного Codex, хотя лишь читает состояние с диска"
+  );
+});
+
+// ───────────────────────────────── 25. Версия из единственного источника
+
+await t("25. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
   const { pluginVersion } = await import(`${ROOT_URL}/scripts/version.mjs?v=${Date.now()}`);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"));
   assert.equal(pluginVersion(), manifest.version, "версия разошлась с манифестом");

@@ -9,9 +9,10 @@
 //
 // Пункты 2 и 3 выключены по умолчанию и включаются через /codex-bridge:setup.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { serve, text, fail } from "../scripts/mcp-lib.mjs";
 import { pluginVersion } from "../scripts/version.mjs";
+import { killTree, isWindows } from "../scripts/proc.mjs";
 import { ToolProxy, readExposed } from "./tool-proxy.mjs";
 
 const cleanEnv = (n) => {
@@ -29,42 +30,138 @@ const cfg = readExposed();
 // зависимости от того, что запросила вызывающая сторона.
 const WRITE_TOOLS = ["Edit", "Write", "NotebookEdit", "Bash", "MultiEdit"];
 
+// Предел на вывод одного вызова. Считается в байтах, а не в символах строки:
+// сравнивать длину JS-строки с «мегабайтами» неверно, кириллица и эмодзи дают
+// в UTF-8 больше байт, чем символов.
+const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+
+/** Живые процессы Claude: при остановке моста их нельзя оставлять сиротами. */
+const running = new Set();
+
+function stopAll() {
+  for (const child of running) killTree(child.pid);
+  running.clear();
+}
+
 /**
  * ВАЖНО: --allowedTools НЕ ограничивает набор инструментов, он лишь снимает
  * запрос подтверждения. Ограничение доступности даёт --tools, а --disallowedTools
  * блокирует поимённо. Используем --tools как основной механизм и
  * --disallowedTools как страховку для write-инструментов.
+ *
+ * Запуск асинхронный. Прежний spawnSync блокировал event loop на всё время
+ * работы Claude — до десяти минут: сервер не отвечал на ping, не принимал
+ * отмену и сериализовал все параллельные вызовы. Ровно этот дефект уже был
+ * исправлен на стороне Codex, а на обратном направлении оставался.
  */
-function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs = 600_000 } = {}) {
+function runClaude(prompt, { model, tools, denyTools, mode = "plan", timeoutMs = 600_000, signal } = {}) {
   const args = ["-p", "--model", model || "sonnet", "--permission-mode", mode];
   if (Array.isArray(tools)) args.push("--tools", tools.join(","));
   if (denyTools?.length) args.push("--disallowedTools", denyTools.join(","));
 
-  const r = spawnSync(CLAUDE_BIN, args, {
-    input: prompt,
-    encoding: "utf8",
-    timeout: timeoutMs,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (r.error?.code === "ENOENT") return { ok: false, error: "Бинарь claude не найден в PATH." };
-  if (r.error?.code === "ETIMEDOUT") return { ok: false, error: "Claude не ответил за отведённое время." };
-  if (r.error) return { ok: false, error: String(r.error.message || r.error) };
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve({ ok: false, aborted: true, error: "Вызов отменён до запуска Claude." });
 
-  const out = (r.stdout || "").trim();
-  const errText = (r.stderr || "").trim();
-  // Ненулевой код — ошибка даже при непустом stdout: частичный отчёт, выданный
-  // за успешный результат, опаснее явного отказа.
-  if (r.status !== 0) {
-    return {
-      ok: false,
-      error:
-        `Claude завершился с кодом ${r.status}.` +
-        (errText ? `\n${errText.slice(0, 800)}` : "") +
-        (out ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
+    let child;
+    try {
+      child = spawn(CLAUDE_BIN, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        // Своя группа процессов: Claude запускает подпроцессы, и убийство
+        // одного лидера оставило бы их работать. На Windows группу заменяет
+        // taskkill /T внутри killTree.
+        detached: !isWindows,
+        windowsHide: true,
+      });
+    } catch (e) {
+      return resolve({ ok: false, error: String(e?.message || e) });
+    }
+    running.add(child);
+
+    const outChunks = [];
+    const errChunks = [];
+    let outBytes = 0;
+    let errBytes = 0;
+    let settled = false;
+    let timer = null;
+
+    // Исход один, кто бы ни пришёл первым: выход, ошибка, таймаут, отмена или
+    // переполнение. Без единой точки разрешения гонки промис резолвился бы
+    // дважды, а таймер и слушатель отмены оставались бы висеть.
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      signal?.removeEventListener?.("abort", onAbort);
+      running.delete(child);
+      resolve(result);
     };
-  }
-  if (!out) return { ok: false, error: errText || "Claude вернул пустой ответ." };
-  return { ok: true, output: out };
+
+    function onAbort() {
+      killTree(child.pid);
+      settle({ ok: false, aborted: true, error: "Вызов отменён, Claude остановлен." });
+    }
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+
+    const overflow = (stream) => {
+      killTree(child.pid);
+      settle({
+        ok: false,
+        error: `Claude напечатал в ${stream} больше ${Math.round(MAX_OUTPUT_BYTES / 1024 / 1024)} МБ — вывод не принят, процесс остановлен.`,
+      });
+    };
+
+    child.stdout.on("data", (b) => {
+      outBytes += b.length;
+      if (outBytes > MAX_OUTPUT_BYTES) return overflow("stdout");
+      outChunks.push(b);
+    });
+    child.stderr.on("data", (b) => {
+      errBytes += b.length;
+      if (errBytes > MAX_OUTPUT_BYTES) return overflow("stderr");
+      errChunks.push(b);
+    });
+
+    child.on("error", (e) => {
+      running.delete(child);
+      settle(
+        e?.code === "ENOENT"
+          ? { ok: false, error: "Бинарь claude не найден в PATH." }
+          : { ok: false, error: String(e?.message || e) }
+      );
+    });
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        killTree(child.pid);
+        settle({ ok: false, error: "Claude не ответил за отведённое время." });
+      }, timeoutMs);
+    }
+
+    child.stdin.on("error", () => {}); // закрытый stdin не должен ронять мост
+    child.stdin.write(prompt);
+    child.stdin.end();
+
+    // close, а не exit: к этому моменту потоки дочитаны до конца.
+    child.on("close", (code, sig) => {
+      const out = Buffer.concat(outChunks).toString("utf8").trim();
+      const errText = Buffer.concat(errChunks).toString("utf8").trim();
+
+      // Ненулевой код — ошибка даже при непустом stdout: частичный отчёт,
+      // выданный за успешный результат, опаснее явного отказа.
+      if (code !== 0) {
+        return settle({
+          ok: false,
+          error:
+            `Claude завершился с кодом ${code === null ? `сигналом ${sig}` : code}.` +
+            (errText ? `\n${errText.slice(0, 800)}` : "") +
+            (out ? `\n\nЧастичный вывод (не считать результатом):\n${out.slice(0, 800)}` : ""),
+        });
+      }
+      if (!out) return settle({ ok: false, error: errText || "Claude вернул пустой ответ." });
+      settle({ ok: true, output: out });
+    });
+  });
 }
 
 /**
@@ -178,7 +275,7 @@ if (proxy.errors.length) {
 
 // ------------------------------------------------------------------ обработка
 
-async function handle(name, args) {
+async function handle(name, args, ctx = {}) {
   if (proxy.has(name)) {
     try {
       const res = await proxy.call(name, args);
@@ -196,7 +293,7 @@ ${args.context ? `КОНТЕКСТ ОТ GPT:\n${args.context}\n\n` : ""}ВОПР
 ${args.question}
 
 Ответь по существу и сжато. Если не согласен с посылкой вопроса — скажи прямо. Обозначь степень уверенности там, где её нет.`;
-    const r = runClaude(prompt, { model: args.model });
+    const r = await runClaude(prompt, { model: args.model, signal: ctx.signal });
     return r.ok ? text(`Ответ Claude:\n\n${r.output}`) : fail(r.error);
   }
 
@@ -207,7 +304,7 @@ ${args.question}
 ${args.proposal}
 
 Дай список конкретных возражений: что может сломаться, какие допущения не проверены, что упущено. Если возражений нет — скажи, но назови условия, при которых решение перестанет работать. Не переписывай решение целиком, критикуй.`;
-    const r = runClaude(prompt, { model: args.model });
+    const r = await runClaude(prompt, { model: args.model, signal: ctx.signal });
     return r.ok ? text(`Ответ Claude:\n\n${r.output}`) : fail(r.error);
   }
 
@@ -226,11 +323,12 @@ ${args.task}
 ${write ? "Ты можешь изменять файлы." : "Работай только на чтение: ничего не меняй, верни результат текстом."}
 
 В конце дай сводку: что сделал, какие файлы затронул, чем проверил, что осталось незакрытым.`;
-    const r = runClaude(prompt, {
+    const r = await runClaude(prompt, {
       model: args.model,
       tools,
       denyTools,
       mode: write ? "acceptEdits" : "plan",
+      signal: ctx.signal,
     });
     return r.ok ? text(`Claude отчитался:\n\n${r.output}`) : fail(r.error);
   }
@@ -238,6 +336,22 @@ ${write ? "Ты можешь изменять файлы." : "Работай т�
   return fail(`Неизвестный инструмент: ${name}`);
 }
 
-process.on("exit", () => proxy.stop());
+// Мост уходит — Claude уходит с ним. Иначе закрытие Codex оставляет позади
+// процессы, которые продолжают править файлы в репозитории без надзора.
+// Закрытие stdin намеренно НЕ убивает Claude: клиент закрывает поток сразу
+// после отправки запроса, и убийство по этому событию отменяло бы работу,
+// которую сам же клиент и заказал. Сервер доживает до конца вызова и уходит
+// по exit — тогда и снимаются процессы.
+process.on("exit", () => {
+  stopAll();
+  proxy.stop();
+});
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => {
+    stopAll();
+    proxy.stop();
+    process.exit(130);
+  });
+}
 
 serve({ name: "claude-bridge", version: pluginVersion(), tools: TOOLS, handle });
