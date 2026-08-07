@@ -6,13 +6,15 @@
 // инструмента написать скрипт к платному Images API. Промпт ниже этот путь
 // закрывает жёстко.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { codexBinary, denoise, explainCodexFailure, envClean, bypassSandboxEnabled, capabilities } from "./codex-core.mjs";
 import { extractOutput, progressTrail } from "./codex-events.mjs";
+import { prompt as imagePrompt, message } from "./i18n-image.mjs";
+import { killTree, isWindows } from "./proc.mjs";
 
 export const PROMPT_MAX = 20_000;
 export const ASPECT_RATIOS = ["1:1", "9:16", "16:9", "4:3", "3:4", "auto"];
@@ -28,23 +30,23 @@ const codexGenDir = () =>
 export function validate({ prompt, aspect_ratio = "auto", image_resolution = "1K", images = [] }) {
   const errors = [];
 
-  if (!prompt || !String(prompt).trim()) errors.push("prompt обязателен.");
+  if (!prompt || !String(prompt).trim()) errors.push(message("prompt_required"));
   else if (String(prompt).length > PROMPT_MAX)
-    errors.push(`prompt длиннее ${PROMPT_MAX} символов (сейчас ${String(prompt).length}).`);
+    errors.push(message("prompt_too_long", PROMPT_MAX, String(prompt).length));
 
   if (!ASPECT_RATIOS.includes(aspect_ratio))
-    errors.push(`aspect_ratio должен быть одним из: ${ASPECT_RATIOS.join(", ")}.`);
+    errors.push(message("aspect_ratio_invalid", ASPECT_RATIOS));
   if (!RESOLUTIONS.includes(image_resolution))
-    errors.push(`image_resolution должен быть одним из: ${RESOLUTIONS.join(", ")}.`);
+    errors.push(message("resolution_invalid", RESOLUTIONS));
 
   if (aspect_ratio === "auto" && image_resolution !== "1K")
-    errors.push("при aspect_ratio=auto доступно только image_resolution=1K.");
+    errors.push(message("auto_requires_1k"));
   if (aspect_ratio === "1:1" && image_resolution === "4K")
-    errors.push("при aspect_ratio=1:1 разрешение 4K недоступно.");
+    errors.push(message("square_4k_unavailable"));
 
-  if (!Array.isArray(images)) errors.push("images должен быть массивом.");
+  if (!Array.isArray(images)) errors.push(message("images_must_be_array"));
   else if (images.length > MAX_INPUT_IMAGES)
-    errors.push(`входных изображений максимум ${MAX_INPUT_IMAGES} (передано ${images.length}).`);
+    errors.push(message("too_many_images", MAX_INPUT_IMAGES, images.length));
 
   return errors;
 }
@@ -100,14 +102,48 @@ export function sniffImage(file) {
 }
 
 /** Путь обязан остаться внутри корня: out_dir приходит от модели. */
+function realPathWithMissingTail(candidate) {
+  let current = path.resolve(candidate);
+  const tail = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync.native(current);
+      return path.resolve(real, ...tail);
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e;
+      const parent = path.dirname(current);
+      if (parent === current) throw e;
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isRealPathInside(root, candidate) {
+  const rootReal = realPathWithMissingTail(root);
+  const candidateReal = realPathWithMissingTail(candidate);
+  const relative = path.relative(rootReal, candidateReal);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
 export function resolveInside(root, candidate, what) {
   const rootAbs = path.resolve(root);
   if (path.isAbsolute(candidate)) {
-    throw new Error(`${what}: абсолютные пути запрещены (${candidate}).`);
+    throw new Error(message("absolute_path", what, candidate));
   }
   const abs = path.resolve(rootAbs, candidate);
   if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
-    throw new Error(`${what}: путь выходит за пределы проекта (${candidate}).`);
+    throw new Error(message("outside_project", what, candidate));
+  }
+  try {
+    if (!isRealPathInside(rootAbs, abs)) {
+      throw new Error(message("outside_project", what, candidate));
+    }
+  } catch (e) {
+    if (e?.message === message("outside_project", what, candidate)) throw e;
+    // Ошибка разрешения реального пути — отказ по умолчанию: считать путь
+    // безопасным без проверки существующего предка нельзя.
+    throw new Error(message("outside_project", what, candidate));
   }
   return abs;
 }
@@ -116,39 +152,23 @@ export function resolveInside(root, candidate, what) {
 function acceptableSource(file, cwd) {
   const abs = path.resolve(file);
   const roots = [path.resolve(cwd), path.resolve(codexGenDir())];
-  return roots.some((r) => abs === r || abs.startsWith(r + path.sep));
+  try {
+    return roots.some((r) => isRealPathInside(r, abs));
+  } catch {
+    return false;
+  }
 }
 
 // -------------------------------------------------------------------- промпт
 
 function buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs }) {
-  const spec = [
-    aspect_ratio !== "auto" ? `Соотношение сторон: ${aspect_ratio}.` : null,
-    `Разрешение: ${image_resolution}.`,
-    refs.length
-      ? `К запросу приложено референсных изображений: ${refs.length}. Опирайся на них при генерации.`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return `Сгенерируй изображение и сохрани его в файл.
-
-ОПИСАНИЕ ИЗОБРАЖЕНИЯ:
-${prompt}
-
-ПАРАМЕТРЫ: ${spec}
-
-КАК ЭТО СДЕЛАТЬ — соблюдай строго:
-1. Используй свой ВСТРОЕННЫЙ инструмент генерации изображений (image_gen). Он работает на авторизации ChatGPT и входит в подписку.
-2. НЕ пиши скриптов на Python, Node или bash. НЕ обращайся к внешним HTTP-API. НЕ используй OPENAI_API_KEY и никакие другие ключи. Любой такой путь означает платный вызов и считается невыполнением задачи.
-3. Готовый файл должен оказаться ровно по пути:
-   ${target}
-   Если встроенный инструмент сохранил его в другое место (обычно ~/.codex/generated_images/), перемести файл туда, создав каталог при необходимости.
-4. Последней строкой ответа выведи ровно: SAVED: ${target}
-   Если сохранить не удалось — последней строкой выведи: FAILED: <причина>
-
-Ничего другого в репозитории не меняй.`;
+  return imagePrompt("generate", {
+    description: prompt,
+    aspectRatio: aspect_ratio,
+    resolution: image_resolution,
+    target,
+    referenceCount: refs.length,
+  });
 }
 
 // -------------------------------------------------------------------- запуск
@@ -157,12 +177,10 @@ function resolveRefs(refs, cwd) {
   return refs.map((r) => {
     const s = String(r);
     if (/^https?:\/\//i.test(s)) {
-      throw new Error(
-        `Референс "${s}" — URL. Встроенный инструмент принимает локальные файлы: скачай изображение в проект и передай путь.`
-      );
+      throw new Error(message("reference_url", s));
     }
-    const abs = resolveInside(cwd, s, `референс "${s}"`);
-    if (!fs.existsSync(abs)) throw new Error(`Референс не найден: ${s}`);
+    const abs = resolveInside(cwd, s, message("reference_label", s));
+    if (!fs.existsSync(abs)) throw new Error(message("reference_not_found", s));
     return abs;
   });
 }
@@ -183,6 +201,81 @@ function rescueGenerated(sinceMs) {
   return best?.path || null;
 }
 
+function runCodexAsync(command, args, { input, cwd, timeoutMs, signal }) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve({ stdout: "", stderr: "", status: null, aborted: true });
+    }
+
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: !isWindows,
+        windowsHide: true,
+      });
+    } catch (error) {
+      return resolve({ stdout: "", stderr: "", status: null, error });
+    }
+
+    const stdout = [];
+    const stderr = [];
+    let bytes = 0;
+    let spawnError = null;
+    let aborted = false;
+    let timedOut = false;
+    let overflow = false;
+    let timer = null;
+
+    const stop = () => killTree(child.pid);
+    const onAbort = () => {
+      aborted = true;
+      stop();
+    };
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+
+    const collect = (chunks) => (chunk) => {
+      if (overflow) return;
+      bytes += chunk.length;
+      if (bytes > 32 * 1024 * 1024) {
+        overflow = true;
+        stop();
+        return;
+      }
+      chunks.push(chunk);
+    };
+    child.stdout.on("data", collect(stdout));
+    child.stderr.on("data", collect(stderr));
+    child.on("error", (error) => { spawnError = error; });
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        stop();
+      }, timeoutMs);
+    }
+
+    child.on("close", (status, exitSignal) => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      const error = spawnError ||
+        (timedOut ? Object.assign(new Error("generation timeout"), { code: "ETIMEDOUT" }) : null) ||
+        (overflow ? Object.assign(new Error("output exceeded maxBuffer"), { code: "ENOBUFS" }) : null);
+      resolve({
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        status,
+        signal: exitSignal,
+        error,
+        aborted,
+      });
+    });
+  });
+}
+
 export function generateImage(opts) {
   const {
     prompt,
@@ -194,6 +287,7 @@ export function generateImage(opts) {
     name,
     cwd = process.cwd(),
     timeoutMs = (Number(envClean("CODEX_BRIDGE_IMAGE_TIMEOUT_MIN")) || 15) * 60_000,
+    signal,
   } = opts;
 
   const errors = validate({ prompt, aspect_ratio, image_resolution, images });
@@ -213,6 +307,13 @@ export function generateImage(opts) {
     return { ok: false, error: String(e.message || e) };
   }
   fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!isRealPathInside(cwd, dir)) {
+      return { ok: false, error: message("outside_project", "out_dir", out_dir || dir) };
+    }
+  } catch {
+    return { ok: false, error: message("outside_project", "out_dir", out_dir || dir) };
+  }
 
   const file = `${slug(name || prompt)}-${crypto.randomBytes(3).toString("hex")}.png`;
   const target = path.join(dir, file);
@@ -231,20 +332,27 @@ export function generateImage(opts) {
   args.push("-");
 
   const startedAt = Date.now();
-  const r = spawnSync(codexBinary(), args, {
-    input: buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs }),
-    encoding: "utf8",
-    timeout: timeoutMs,
-    maxBuffer: 32 * 1024 * 1024,
-    cwd,
-  });
+  const input = buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs });
+  const execution = signal
+    ? runCodexAsync(codexBinary(), args, { input, cwd, timeoutMs, signal })
+    : spawnSync(codexBinary(), args, {
+        input,
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 32 * 1024 * 1024,
+        cwd,
+      });
+
+  const finish = (r) => {
+  if (r.aborted)
+    return { ok: false, aborted: true, error: message("generation_cancelled") };
 
   if (r.error?.code === "ENOENT")
-    return { ok: false, error: "Codex CLI не найден. Установи: npm install -g @openai/codex" };
+    return { ok: false, error: message("codex_not_found") };
   if (r.error?.code === "ETIMEDOUT")
     return {
       ok: false,
-      error: `Генерация не уложилась в ${Math.round(timeoutMs / 60000)} мин. Обычно занимает 4–6 минут; при 4K бывает дольше.`,
+      error: message("generation_timeout", Math.round(timeoutMs / 60000)),
     };
   if (r.error) return { ok: false, error: String(r.error.message || r.error) };
 
@@ -260,11 +368,7 @@ export function generateImage(opts) {
     const reason = explainCodexFailure(errText, out);
     return {
       ok: false,
-      error:
-        (reason ? `${reason}\n\n` : "") +
-        `Codex завершился с кодом ${r.status}.` +
-        (errText ? `\n${errText.slice(0, 500)}` : "") +
-        `\n\nПоследние строки вывода:\n${tailOf(out)}`,
+      error: message("codex_failed", r.status, reason, errText, tailOf(out)),
     };
   }
 
@@ -273,9 +377,7 @@ export function generateImage(opts) {
     if (!ext) {
       return {
         ok: false,
-        error:
-          `Файл ${file} не является изображением (не распознана сигнатура PNG/JPEG/GIF/WebP). ` +
-          `Codex мог сохранить отчёт или лог вместо картинки. Файл не принят.`,
+        error: message("not_image", file),
       };
     }
     const finalPath = file.startsWith(dir + path.sep)
@@ -301,9 +403,7 @@ export function generateImage(opts) {
     if (!acceptableSource(declared, cwd)) {
       return {
         ok: false,
-        error:
-          `Codex сообщил путь ${declared}, который находится вне проекта и вне ${codexGenDir()}. ` +
-          `Копирование отклонено.`,
+        error: message("source_outside_allowed_roots", declared, codexGenDir()),
       };
     }
     return accept(declared, declared);
@@ -321,11 +421,9 @@ export function generateImage(opts) {
   );
   return {
     ok: false,
-    error:
-      (failed ? `Codex сообщил об ошибке: ${failed}` : "Файл изображения не появился.") +
-      (suspectScript
-        ? "\nПохоже, Codex попытался обратиться к платному Images API вместо встроенного инструмента. Повтори запрос."
-        : "") +
-      `\n\nПоследние строки вывода Codex:\n${tailOf(out)}`,
+    error: message("generation_missing", failed, suspectScript, tailOf(out)),
   };
+  };
+
+  return execution?.then ? execution.then(finish) : finish(execution);
 }

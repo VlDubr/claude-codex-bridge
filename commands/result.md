@@ -1,8 +1,9 @@
 ---
-description: Показать результат завершённой задачи Codex
+description: Show the result of a completed Codex job
 argument-hint: "[job-id]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_result, Bash(git status)
 ---
 
-Вызови инструмент **codex_result** с `job_id` из `$ARGUMENTS` (если пусто — возьмётся последняя задача).
+Call **codex_result** with the `job_id` from `$ARGUMENTS` (if empty, the latest job will be used).
 
-Покажи вывод GPT целиком, не сокращая: пользователь ждал его. После вывода добавь от себя короткий разбор — что здесь стоит применить, что спорно, что требует проверки. Если это была делегированная задача, проверь `git status` и скажи, какие файлы GPT реально изменил.
+Show GPT's output in full, without shortening it: the user has been waiting for it. After the output, add a brief analysis of your own—what should be applied, what is debatable, and what needs verification. If this was a delegated job, check `git status` and state which files GPT actually changed.

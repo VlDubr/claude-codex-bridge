@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { codexBinary, envClean } from "./codex-core.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const codexHome = () => envClean("CODEX_HOME") || path.join(os.homedir(), ".codex");
 
@@ -90,31 +91,26 @@ export function inspect() {
     const foreign = bin.versions.filter((v) => majorMinor(v) !== majorMinor(cliVersion));
     if (cliVersion && foreign.length) {
       problems.push({
-        what: `Рассинхрон версий: CLI ${cliVersion}, хелперы в .sandbox-bin — ${bin.versions.join(", ")}`,
-        why: "Смешанная установка ломает песочницу, а сбой выходит наружу как отказ MCP-инструмента.",
-        fix: "Переустановить Codex целиком: npm install -g @openai/codex — затем удалить устаревшие бинари из " + bin.dir,
+        what: message("health_version_mismatch", cliVersion, bin.versions),
+        why: message("health_mixed_install"),
+        fix: message("health_reinstall", bin.dir),
       });
     }
     if (bin.versions.length > 1) {
-      notes.push(`В .sandbox-bin несколько версий хелперов: ${bin.versions.join(", ")}`);
+      notes.push(message("health_multiple_helpers", bin.versions));
     }
   }
 
   if (isWindows && sandboxMode && sandboxMode !== "none") {
     if (!bin.hasWindowsSetup) {
       problems.push({
-        what: `В config.toml включена песочница ([windows] sandbox = '${sandboxMode}'), но codex-windows-sandbox-setup.exe отсутствует`,
-        why: "Любой прогон codex exec с песочницей упадёт; ошибка выглядит как «user cancelled MCP tool call».",
-        fix:
-          "Переустановить Codex (npm install -g @openai/codex). Временный обход — включить настройку плагина " +
-          "bypass_sandbox, но тогда Codex выполняет команды без изоляции.",
+        what: message("health_sandbox_missing", sandboxMode),
+        why: message("health_sandbox_will_fail"),
+        fix: message("health_sandbox_fix"),
       });
     }
     if (sandboxMode === "elevated") {
-      notes.push(
-        "Режим песочницы 'elevated' требует прав администратора: без них изоляция профилей отрабатывает не полностью " +
-          "(в логе — SetFileAttributesW ... Отказано в доступе)."
-      );
+      notes.push(message("health_elevated_note"));
     }
   }
 
@@ -123,19 +119,20 @@ export function inspect() {
 
 export function format(r) {
   const lines = [];
-  lines.push(`codex CLI: ${r.cliVersion || "неизвестно"}`);
+  lines.push(message("health_cli", r.cliVersion || message("health_unknown")));
   if (r.bin.exists) {
-    lines.push(
-      `хелперы:   ${r.bin.versions.length ? r.bin.versions.join(", ") : "версии не определены"}` +
-        `${r.isWindows ? `, windows-sandbox-setup: ${r.bin.hasWindowsSetup ? "есть" : "ОТСУТСТВУЕТ"}` : ""}`
-    );
+    lines.push(message(
+      "health_helpers",
+      r.bin.versions.length ? r.bin.versions.join(", ") : message("health_versions_unknown"),
+      r.isWindows ? r.bin.hasWindowsSetup : null
+    ));
   }
-  if (r.sandboxMode) lines.push(`песочница: [windows] sandbox = '${r.sandboxMode}'`);
+  if (r.sandboxMode) lines.push(message("health_sandbox", r.sandboxMode));
 
   for (const p of r.problems) {
-    lines.push("", `ПРОБЛЕМА: ${p.what}`, `  ${p.why}`, `  Решение: ${p.fix}`);
+    lines.push("", message("health_problem", p.what), `  ${p.why}`, message("health_solution", p.fix));
   }
-  for (const n of r.notes) lines.push("", `Примечание: ${n}`);
-  if (!r.problems.length) lines.push("установка Codex выглядит согласованной");
+  for (const n of r.notes) lines.push("", message("health_note", n));
+  if (!r.problems.length) lines.push(message("health_consistent"));
   return lines.join("\n");
 }

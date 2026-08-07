@@ -1,8 +1,9 @@
 ---
-description: Статус фоновых задач Codex
+description: Show the status of background Codex jobs
 argument-hint: "[job-id]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_status
 ---
 
-Вызови инструмент **codex_status**, передав `job_id`, если он указан в `$ARGUMENTS`.
+Call **codex_status**, passing `job_id` if it is specified in `$ARGUMENTS`.
 
-Покажи результат компактно. Если какая-то задача уже завершена, а её вывод пользователь ещё не смотрел — скажи об этом и предложи `/codex-bridge:result`.
+Show the result concisely. If a job has already completed but the user has not viewed its output yet, mention this and suggest `/codex-bridge:result`.

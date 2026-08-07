@@ -1,10 +1,11 @@
 ---
-description: Показать, чем занята вызванная модель прямо сейчас
+description: Show what the invoked model is working on right now
 argument-hint: "[job-id] [--limit N]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_progress
 ---
 
-Вызови инструмент **codex_progress** с `job_id` из `$ARGUMENTS` (если не указан — последняя задача) и `limit`, если передан `--limit`.
+Call **codex_progress** with the `job_id` from `$ARGUMENTS` (if omitted, use the latest job) and `limit` if `--limit` was provided.
 
-Покажи ленту как есть: пользователь хочет видеть ход работы, а не твой пересказ. От себя добавь одну строку — на каком этапе задача и стоит ли ждать дальше.
+Show the event stream as is: the user wants to see the work in progress, not your summary. Add one line of your own stating the current stage of the job and whether it is worth continuing to wait.
 
-Если событий нет, а задача идёт давно, это обычно значит, что Codex запущен без поддержки `--json`: тогда ленты не будет, и остаётся дождаться результата через `/codex-bridge:result`.
+If there are no events and the job has been running for a long time, this usually means Codex was started without `--json` support: no event stream will be available, so the only option is to wait for the result through `/codex-bridge:result`.

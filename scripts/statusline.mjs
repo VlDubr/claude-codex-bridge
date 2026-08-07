@@ -7,6 +7,7 @@
 // затирать чужую настройку нельзя.
 
 import { listJobs, jobProgress, humanAge } from "./codex-core.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
@@ -27,7 +28,7 @@ process.stdin.on("end", () => {
 
   const parts = running.slice(0, 2).map((j) => {
     const trail = jobProgress(j.id, { limit: 1 }).trail;
-    return `${j.mode}${j.model ? `/${j.model}` : ""} ${humanAge(j.startedAt)}: ${clip(trail[0] || "запускается", 60)}`;
+    return `${j.mode}${j.model ? `/${j.model}` : ""} ${humanAge(j.startedAt)}: ${clip(trail[0] || message("status_starting"), 60)}`;
   });
   const extra = running.length > 2 ? ` (+${running.length - 2})` : "";
   process.stdout.write(`codex · ${parts.join(" | ")}${extra}`);

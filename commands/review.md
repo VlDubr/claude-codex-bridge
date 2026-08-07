@@ -1,13 +1,14 @@
 ---
-description: Ревью текущих изменений силами GPT (Codex)
-argument-hint: "[--base <ветка>] [--now] [доп. фокус]"
+description: Review the current changes using GPT (Codex)
+argument-hint: "[--base <branch>] [--now] [additional focus]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_review
 ---
 
-Пользователь просит ревью кода от GPT. Аргументы: `$ARGUMENTS`
+The user is requesting a code review from GPT. Arguments: `$ARGUMENTS`
 
-Разбери аргументы и вызови инструмент **codex_review**:
-- `--base <ref>` → параметр `base` (ревью всей ветки относительно этой базы)
-- `--now` → `background: false` (ждать ответ прямо сейчас; по умолчанию фоном)
-- всё остальное → `focus`
+Parse the arguments and call **codex_review**:
+- `--base <ref>` → the `base` parameter (review the entire branch against this base)
+- `--now` → `background: false` (wait for the response now; runs in the background by default)
+- everything else → `focus`
 
-Если запуск фоновый, коротко сообщи id задачи и не жди. Если синхронный — покажи вывод GPT как есть, без пересказа, а от себя добавь только строчку: с чем ты согласен и с чем нет. Не переписывай код по итогам ревью, пока пользователь не попросит.
+If the job runs in the background, briefly report the job id and do not wait. If it runs synchronously, show GPT's output as is, without summarizing it, and add only one line of your own stating what you agree and disagree with. Do not rewrite code based on the review until the user asks.

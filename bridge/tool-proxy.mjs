@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { McpStdioClient } from "./mcp-client.mjs";
+import { message } from "../scripts/i18n-runtime.mjs";
 
 const cleanEnv = (n) => {
   const v = process.env[n];
@@ -94,7 +95,7 @@ export class ToolProxy {
     for (const [alias, entry] of Object.entries(servers)) {
       if (entry.enabled === false) continue;
       if (!entry.command) {
-        this.errors.push(`${alias}: пропущен, поддерживаются только stdio-серверы (нужно поле command)`);
+        this.errors.push(message("proxy_stdio_required", alias));
         continue;
       }
       const client = new McpStdioClient({
@@ -114,7 +115,7 @@ export class ToolProxy {
           n++;
         }
         this.clients.set(alias, client);
-        if (n === 0) this.errors.push(`${alias}: подключён, но ни один инструмент не разрешён allowlist'ом`);
+        if (n === 0) this.errors.push(message("proxy_no_tools", alias));
       } catch (e) {
         this.errors.push(`${alias}: ${e.message || e}`);
         client.stop();
@@ -128,8 +129,8 @@ export class ToolProxy {
     return [...this.routes.entries()].map(([publicName, r]) => ({
       name: publicName,
       description:
-        `[через Claude Code · сервер ${r.alias}] ` +
-        (r.schema.description || "Инструмент, проброшенный из MCP-окружения Claude."),
+        message("proxy_description_prefix", r.alias) +
+        (r.schema.description || message("proxy_description_default")),
       inputSchema: r.schema.inputSchema || { type: "object", properties: {} },
     }));
   }
@@ -140,7 +141,7 @@ export class ToolProxy {
 
   async call(name, args) {
     const route = this.routes.get(name);
-    if (!route) throw new Error(`Инструмент ${name} не проброшен.`);
+    if (!route) throw new Error(message("proxy_not_exposed", name));
     const client = this.clients.get(route.alias);
     return client.call(route.tool, args);
   }

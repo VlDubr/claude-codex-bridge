@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
-  "version": "0.4.1",
+  "version": "0.7.1",
   "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
   "author": {
     "name": "VlDubr",
@@ -21,6 +21,20 @@
   ],
   "defaultEnabled": false,
   "userConfig": {
+    "review_backend": {
+      "type": "string",
+      "title": "Code review backend",
+      "description": "exec (default) uses the established codex exec review path. app-server explicitly enables Codex's native review/start reviewer; it falls back to exec only if review/start was not accepted.",
+      "default": "exec",
+      "required": false
+    },
+    "language": {
+      "type": "string",
+      "title": "Язык описаний, сообщений и промптов",
+      "description": "en — английский (по умолчанию), ru — русский. Промпты уходят вызываемой модели на выбранном языке, поэтому от него зависит и язык её ответов. Команды и агенты всегда на английском.",
+      "default": "en",
+      "required": false
+    },
     "default_model": {
       "type": "string",
       "title": "Модель Codex по умолчанию",
@@ -45,6 +59,14 @@
       "description": "Лента действий Codex отправляется клиенту как notifications/progress. Выключите, если ваша сборка Claude Code задета дефектом anthropics/claude-code#47378: там получение таких уведомлений закрывает соединение с MCP-сервером и следующий вызов падает с \"Connection closed\".",
       "default": true,
       "required": false
+    },
+    "max_parallel_jobs": {
+      "type": "number",
+      "title": "Предел одновременных задач Codex",
+      "description": "Сколько задач может выполняться сразу. Каждая — отдельный процесс Codex, расходующий квоту ChatGPT и память. Ноль снимает предел.",
+      "default": 4,
+      "min": 0,
+      "max": 32
     },
     "job_timeout_minutes": {
       "type": "number",

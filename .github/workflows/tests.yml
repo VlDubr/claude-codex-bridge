@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["20.11", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Run regression tests
+        run: node tests/regressions.mjs
+
+  # Манифест от платформы не зависит — одного прогона достаточно, незачем
+  # ставить Claude Code в каждую ячейку матрицы.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate plugin strictly
+        run: |
+          npm install --global @anthropic-ai/claude-code@2.1.220
+          claude plugin validate . --strict

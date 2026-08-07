@@ -9,6 +9,7 @@ import { checkCodex, dataDir, envClean, bypassSandboxEnabled as bypassOn } from 
 import { fetchModels } from "./models.mjs";
 import { inspect as inspectCodex, format as formatCodex } from "./codex-health.mjs";
 import { link, unlink, isLinked, linkedPath, bridgePath, CONFIG_PATH } from "./link-back.mjs";
+import { message } from "./i18n-runtime.mjs";
 import {
   readExposed,
   writeExposed,
@@ -39,11 +40,8 @@ try {
     },
   }));
 } catch (e) {
-  console.error(`Неверные аргументы: ${e.message}`);
-  console.error(
-    "Доступно: --expose-list | --expose <сервер> [--tools a,b] | --unexpose <сервер> |\n" +
-      "          --allow-task [--task-tools a,b] | --deny-task | --link-back | --unlink-back"
-  );
+  console.error(message("setup_bad_args", e.message));
+  console.error(message("setup_usage"));
   process.exit(2);
 }
 
@@ -53,7 +51,7 @@ for (const [a, b] of [
   ["allow-task", "deny-task"],
 ]) {
   if (opts[a] && opts[b]) {
-    console.error(`Нельзя указывать одновременно --${a} и --${b}.`);
+    console.error(message("setup_mutually_exclusive", a, b));
     process.exit(2);
   }
 }
@@ -65,69 +63,73 @@ const c = checkCodex();
 
 lines.push(`node:     ${process.version}`);
 if (c.reason === "not_installed") {
-  lines.push(`codex:    НЕ НАЙДЕН (${c.bin})`);
-  lines.push(`          установка: npm install -g @openai/codex`);
+  lines.push(message("setup_codex_missing", c.bin));
+  lines.push(message("setup_codex_install"));
 } else {
-  lines.push(`codex:    ${c.version || "установлен"}`);
-  lines.push(c.ok ? `auth:     OK (${c.authInfo.split("\n")[0] || "авторизован"})` : `auth:     НЕТ — выполни: codex login`);
+  lines.push(`codex:    ${c.version || message("setup_codex_installed")}`);
+  lines.push(
+    c.ok
+      ? message("setup_auth_ok", c.authInfo.split("\n")[0] || message("setup_authorized"))
+      : message("setup_auth_no")
+  );
 }
 
 const claudeBin = spawnSync(envClean("CLAUDE_BIN") || "claude", ["--version"], { encoding: "utf8" });
 lines.push(
   claudeBin.error
-    ? `claude:   не найден в PATH (обратный мост GPT→Claude работать не будет)`
-    : `claude:   ${(claudeBin.stdout || "").trim()}`
+    ? message("setup_claude_missing")
+    : message("setup_claude_version", (claudeBin.stdout || "").trim())
 );
 
-lines.push(`джобы:    ${dataDir()}`);
+lines.push(message("setup_jobs", dataDir()));
 
 const mr = fetchModels();
 lines.push(
   mr.ok
-    ? `модели:   ${mr.models.length} шт. (${mr.source}) — ${mr.models.slice(0, 4).map((m) => m.id).join(", ")}${mr.models.length > 4 ? ", …" : ""}`
-    : `модели:   не удалось получить — ${mr.error.split("\n")[0]}`
+    ? message(
+        "setup_models",
+        mr.models.length,
+        mr.source,
+        mr.models.slice(0, 4).map((m) => m.id).join(", "),
+        mr.models.length > 4
+      )
+    : message("setup_models_failed", mr.error.split("\n")[0])
 );
 const health = inspectCodex();
 lines.push("", formatCodex(health), "");
 if (bypassOn()) {
-  lines.push(
-    "ВНИМАНИЕ: включён bypass_sandbox — Codex выполняет команды без изоляции. " +
-      "Это аварийный режим; после починки установки Codex выключите его."
-  );
+  lines.push(message("setup_bypass_warning"));
 }
-lines.push(`изображения → ${envClean("CODEX_BRIDGE_IMAGE_DIR") || "assets/generated"} (встроенный image_gen, без API-ключа)`);
+lines.push(message("setup_images", envClean("CODEX_BRIDGE_IMAGE_DIR") || "assets/generated"));
 
 const back = isLinked();
-lines.push(`мост GPT→Claude: ${back ? "подключён" : "не подключён (включить: /codex-bridge:setup --link-back)"}`);
+lines.push(message("setup_back_bridge", back));
 if (back && linkedPath() !== bridgePath()) {
-  lines.push(`          путь устарел, будет исправлен при следующем старте сессии`);
+  lines.push(message("setup_path_stale"));
 }
 
 // ------------------------------------------- проброс инструментов Claude в Codex
 
 const exposed = readExposed();
 const exposedNames = Object.keys(exposed.servers);
-lines.push(
-  `проброс в Codex: ${exposedNames.length ? exposedNames.join(", ") : "ничего не проброшено"}` +
-    `${exposed.allowTask ? " | claude_task включён" : ""}`
-);
+lines.push(message("setup_proxy_summary", exposedNames, exposed.allowTask));
 
 if (opts["expose-list"]) {
   const avail = discoverClaudeServers(envClean("CLAUDE_PROJECT_DIR") || process.cwd());
-  lines.push("", "MCP-серверы, найденные в конфигах Claude Code:");
+  lines.push("", message("setup_servers_header"));
   const names = Object.keys(avail);
   if (!names.length) {
-    lines.push("  (ничего не найдено в ~/.claude.json и ./.mcp.json)");
+    lines.push(message("setup_servers_none"));
   } else {
     for (const n of names) {
       const a = avail[n];
       const ok = a.transport === "stdio";
       lines.push(
-        `  ${n.padEnd(20)} ${a.transport}${ok ? "" : "  — не поддерживается (только stdio)"}` +
-          `${exposed.servers[n] ? "  [уже проброшен]" : ""}`
+        `  ${n.padEnd(20)} ${a.transport}${ok ? "" : message("setup_transport_unsupported")}` +
+          `${exposed.servers[n] ? message("setup_already_exposed") : ""}`
       );
     }
-    lines.push("", "Пробросить:  /codex-bridge:setup --expose <имя> [--tools a,b,c]");
+    lines.push("", message("setup_expose_hint"));
   }
 }
 
@@ -136,12 +138,11 @@ if (toExpose) {
   const avail = discoverClaudeServers(envClean("CLAUDE_PROJECT_DIR") || process.cwd());
   const def = avail[toExpose];
   if (!def) {
-    lines.push("", `Сервер "${toExpose}" не найден. Список: /codex-bridge:setup --expose-list`);
+    lines.push("", message("setup_server_not_found", toExpose));
   } else if (def.transport !== "stdio") {
     lines.push(
       "",
-      `Сервер "${toExpose}" использует транспорт ${def.transport}. Мост умеет только stdio: ` +
-        `HTTP/SSE-серверы с собственной авторизацией нужно подключать к Codex напрямую в ~/.codex/config.toml.`
+      message("setup_server_transport", toExpose, def.transport)
     );
   } else {
     const toolsFlag = opts.tools;
@@ -156,15 +157,14 @@ if (toExpose) {
     if (dropped.length) {
       lines.push(
         "",
-        `Переменные окружения ${dropped.join(", ")} НЕ скопированы: их значения заданы литералами ` +
-          `и могут содержать секреты. Задайте их через \${VAR} в конфиге Claude или в окружении Codex.`
+        message("setup_env_dropped", dropped)
       );
     }
     writeExposed({ servers: exposed.servers, allow_task: exposed.allowTask, task_tools: exposed.taskTools });
     lines.push(
       "",
-      `Сервер "${toExpose}" проброшен в Codex (${toolsFlag || "все инструменты"}).`,
-      `Записано в ${EXPOSED_PATH}. Перезапусти Codex, чтобы он увидел инструменты.`
+      message("setup_server_exposed", toExpose, toolsFlag),
+      message("setup_exposed_written", EXPOSED_PATH)
     );
   }
 }
@@ -173,7 +173,7 @@ const toUnexpose = opts.unexpose;
 if (toUnexpose) {
   delete exposed.servers[toUnexpose];
   writeExposed({ servers: exposed.servers, allow_task: exposed.allowTask, task_tools: exposed.taskTools });
-  lines.push("", `Сервер "${toUnexpose}" больше не пробрасывается.`);
+  lines.push("", message("setup_server_unexposed", toUnexpose));
 }
 
 if (opts["allow-task"] || opts["deny-task"]) {
@@ -187,20 +187,33 @@ if (opts["allow-task"] || opts["deny-task"]) {
   lines.push(
     "",
     on
-      ? `claude_task включён. Codex сможет поручать задачи Claude Code${tf ? ` с инструментами: ${tf}` : ""}.`
-      : "claude_task выключен."
+      ? message("setup_task_enabled", tf)
+      : message("setup_task_disabled")
   );
 }
 
 if (opts["link-back"]) {
   const r = link();
-  lines.push("", `Обратный мост ${r.action === "added" ? "добавлен в" : "обновлён в"} ${CONFIG_PATH}`, `  ${r.bridge}`);
+  if (r.action === "conflict") {
+    lines.push("", r.error);
+    process.exitCode = 1;
+  } else {
+    lines.push(
+      "",
+      message(r.action === "added" ? "setup_back_added" : "setup_back_updated", CONFIG_PATH),
+      `  ${r.bridge}`
+    );
+  }
 }
 if (opts["unlink-back"]) {
   const r = unlink();
   lines.push(
     "",
-    { removed: `Обратный мост удалён из ${CONFIG_PATH}`, "not-found": "Блок codex-bridge в config.toml не найден.", "no-config": "config.toml не найден — нечего удалять." }[r.action]
+    {
+      removed: message("setup_back_removed", CONFIG_PATH),
+      "not-found": message("setup_back_not_found"),
+      "no-config": message("setup_config_not_found"),
+    }[r.action]
   );
 }
 

@@ -3,8 +3,9 @@
 // Транспорт — общий mcp-lib.mjs, без внешних зависимостей.
 
 import { serve, text, fail as err } from "./mcp-lib.mjs";
+import { pluginVersion } from "./version.mjs";
 import {
-  checkCodex,
+  probeCodex,
   runJob,
   startJob,
   followJob,
@@ -19,37 +20,33 @@ import {
   cancelJob,
   humanAge,
   envClean,
+  reviewBackend,
   repoKey,
+  buildPrompt,
 } from "./codex-core.mjs";
+import { appServerReviewTarget } from "./app-server.mjs";
 import { describe } from "./codex-events.mjs";
 import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
 import { readChat, writeChat, listChats, deleteChat, withChatLock, isValidSlug } from "./chat-store.mjs";
 import { readPrefs, writePrefs } from "./prefs.mjs";
+import { toolText, uiText } from "./i18n.mjs";
 
-const EFFORT_DESC =
-  "Уровень reasoning. Набор зависит от модели: точный список отдаёт codex_models. Значение minimal принимают только модели прошлых поколений — gpt-5.6 и новее отвергают его ошибкой API.";
+const T = toolText();
+// Ответы берутся на каждый вызов: язык задаётся окружением процесса.
+const U = uiText;
+const EFFORT_DESC = T.effort;
 
 const TOOLS = [
   {
     name: "codex_ask",
-    description:
-      "Спросить у GPT (Codex) второе мнение синхронно и получить ответ в этом же ходе. Используй, когда нужно сверить архитектурное решение, проверить свою гипотезу или получить контраргумент перед тем, как писать код. Отвечает за 1-3 минуты.",
+    description: T.ask_d,
     inputSchema: {
       type: "object",
       properties: {
-        question: { type: "string", description: "Вопрос к GPT, сформулированный самодостаточно." },
-        context: {
-          type: "string",
-          description:
-            "Твой текущий контекст: что ты уже выяснил, какое решение предлагаешь, какие есть сомнения. Чем конкретнее, тем полезнее ответ.",
-        },
-        model: { type: "string", description: "Модель Codex, напр. gpt-5.6-sol или gpt-5.4-mini." },
-        wait_seconds: {
-          type: "number",
-          default: 90,
-          description:
-            "Сколько ждать синхронного ответа. Если Codex не успеет, вызов не падает по таймауту: та же самая работа продолжается тем же процессом в фоне и возвращается job_id вместе с лентой прогресса — дальше следи через codex_progress.",
-        },
+        question: { type: "string", description: T.ask_question },
+        context: { type: "string", description: T.ask_context },
+        model: { type: "string", description: T.ask_model },
+        wait_seconds: { type: "number", default: 90, description: T.ask_wait },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
       },
       required: ["question"],
@@ -57,65 +54,51 @@ const TOOLS = [
   },
   {
     name: "codex_chat",
-    description:
-      "Поговорить с моделью Codex как с отдельным собеседником: тред сохраняется, модель помнит предыдущие сообщения. Используй, когда нужен диалог, а не одиночный вопрос, или когда задачу ведёт конкретная модель GPT.",
+    description: T.chat_d,
     inputSchema: {
       type: "object",
       properties: {
-        message: { type: "string", description: "Сообщение модели." },
-        chat: {
-          type: "string",
-          description:
-            "Имя разговора (латиница, цифры, дефис). Одно имя — один непрерывный тред. По умолчанию default.",
-        },
-        model: {
-          type: "string",
-          description: "Модель Codex для этого разговора. Задаётся на первом сообщении и дальше повторяется сама.",
-        },
+        message: { type: "string", description: T.chat_message },
+        chat: { type: "string", description: T.chat_chat },
+        model: { type: "string", description: T.chat_model },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
-        context: { type: "string", description: "Дополнительный контекст к первому сообщению разговора." },
-        write: {
-          type: "boolean",
-          default: false,
-          description: "Разрешить модели менять файлы в рабочем каталоге. По умолчанию только чтение.",
-        },
-        wait_seconds: { type: "number", default: 120, description: "Сколько ждать ответа в этом же ходе." },
+        context: { type: "string", description: T.chat_context },
+        write: { type: "boolean", default: false, description: T.chat_write },
+        wait_seconds: { type: "number", default: 120, description: T.chat_wait },
       },
       required: ["message"],
     },
   },
   {
     name: "codex_chats",
-    description: "Список разговоров с моделями Codex; можно забыть разговор вместе с его тредом.",
+    description: T.chats_d,
     inputSchema: {
       type: "object",
       properties: {
-        forget: { type: "string", description: "Имя разговора, который надо забыть." },
+        forget: { type: "string", description: T.chats_forget },
       },
     },
   },
   {
     name: "codex_use",
-    description:
-      "Выбрать модель и уровень reasoning по умолчанию для этого репозитория. Действует на последующие вызовы, у которых модель не указана явно.",
+    description: T.use_d,
     inputSchema: {
       type: "object",
       properties: {
-        model: { type: "string", description: "Модель Codex. Пустая строка — сброс к настройке плагина." },
+        model: { type: "string", description: T.use_model },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
-        clear: { type: "boolean", description: "Сбросить и модель, и уровень reasoning." },
+        clear: { type: "boolean", description: T.use_clear },
       },
     },
   },
   {
     name: "codex_review",
-    description:
-      "Запустить обычное ревью кода силами GPT по текущим изменениям. По умолчанию в фоне.",
+    description: T.review_d,
     inputSchema: {
       type: "object",
       properties: {
-        base: { type: "string", description: "Базовая ветка для ревью всей ветки, напр. main." },
-        focus: { type: "string", description: "Опциональный дополнительный фокус." },
+        base: { type: "string", description: T.review_base },
+        focus: { type: "string", description: T.review_focus },
         background: { type: "boolean", default: true },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
@@ -124,16 +107,12 @@ const TOOLS = [
   },
   {
     name: "codex_challenge",
-    description:
-      "Состязательное ревью: GPT оспаривает дизайн-решение, ищет неучтённые режимы отказа и предлагает альтернативы. Используй перед мержем крупного изменения.",
+    description: T.challenge_d,
     inputSchema: {
       type: "object",
       properties: {
-        focus: {
-          type: "string",
-          description: "Что именно оспорить: 'схема ретраев', 'выбор кеша', 'модель прав доступа'.",
-        },
-        base: { type: "string" },
+        focus: { type: "string", description: T.challenge_focus },
+        base: { type: "string", description: T.review_base },
         background: { type: "boolean", default: true },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
@@ -142,76 +121,63 @@ const TOOLS = [
   },
   {
     name: "codex_delegate",
-    description:
-      "Делегировать GPT задачу с правом изменять файлы: исследовать баг, починить тест, отрефакторить кусок. " +
-      "Показывает ленту хода работы, пока ждёт; если GPT не уложился, работа продолжается в фоне и возвращается job_id.",
+    description: T.delegate_d,
     inputSchema: {
       type: "object",
       properties: {
-        task: { type: "string", description: "Описание задачи для GPT, максимально конкретное." },
+        task: { type: "string", description: T.delegate_task },
         model: { type: "string" },
         effort: { type: "string", enum: EFFORT_LEVELS, description: EFFORT_DESC },
-        wait_seconds: {
-          type: "number",
-          default: 120,
-          description:
-            "Сколько ждать с показом ленты действий GPT. Ноль — сразу уйти в фон и вернуть job_id. " +
-            "По истечении вызов не падает: та же работа продолжается тем же процессом.",
-        },
+        wait_seconds: { type: "number", default: 120, description: T.delegate_wait },
       },
       required: ["task"],
     },
   },
   {
     name: "codex_models",
-    description:
-      "Получить список моделей, реально доступных в этом окружении Codex. Спрашивает у самого Codex, а не берёт из зашитого списка. Вызови это, прежде чем указывать model в других инструментах, если не уверен в имени.",
+    description: T.models_d,
     inputSchema: {
       type: "object",
       properties: {
-        refresh: { type: "boolean", description: "Игнорировать кэш и перечитать каталог." },
+        refresh: { type: "boolean", description: T.models_refresh },
       },
     },
   },
   {
     name: "codex_progress",
-    description:
-      "Показать, чем модель занята прямо сейчас: лента её рассуждений, запущенных команд, правок файлов и поисков. Используй вместо ожидания вслепую, когда задача идёт долго.",
+    description: T.progress_d,
     inputSchema: {
       type: "object",
       properties: {
-        job_id: { type: "string", description: "По умолчанию последняя задача." },
-        limit: { type: "number", default: 12, description: "Сколько последних шагов показать." },
-        detail: { type: "boolean", default: false, description: "Показать сводки размышлений целиком." },
-        wait_seconds: {
-          type: "number",
-          description: "Подождать новые события столько секунд, показывая их по мере появления.",
-        },
+        job_id: { type: "string", description: T.progress_job },
+        limit: { type: "number", default: 12, description: T.progress_limit },
+        detail: { type: "boolean", default: false, description: T.progress_detail },
+        wait_seconds: { type: "number", description: T.progress_wait },
       },
     },
   },
   {
     name: "codex_status",
-    description: "Показать статус фоновых задач Codex для текущего репозитория.",
+    description: T.status_d,
     inputSchema: {
       type: "object",
-      properties: { job_id: { type: "string", description: "Опционально: конкретная задача." } },
+      properties: { job_id: { type: "string", description: T.status_job } },
     },
   },
   {
     name: "codex_result",
-    description: "Получить финальный вывод завершённой фоновой задачи Codex.",
+    description: T.result_d,
     inputSchema: {
       type: "object",
       properties: {
-        job_id: { type: "string", description: "Опционально: по умолчанию последняя задача." },
-        tail: { type: "number", description: "Вернуть только последние N строк." },
+        job_id: { type: "string", description: T.result_job },
+        tail: { type: "number", description: T.result_tail },
       },
     },
   },
   {
     name: "codex_cancel",
-    description: "Отменить выполняющуюся фоновую задачу Codex.",
+    description: T.cancel_d,
     inputSchema: {
       type: "object",
       properties: { job_id: { type: "string" } },
@@ -219,21 +185,33 @@ const TOOLS = [
   },
 ];
 
-function guard() {
-  const c = checkCodex();
+const CLI_TOOLS = new Set([
+  "codex_ask",
+  "codex_chat",
+  "codex_delegate",
+  "codex_review",
+  "codex_challenge",
+  "codex_models",
+]);
+
+async function guard() {
+  const c = await probeCodex();
   if (c.reason === "not_installed") {
-    return "Codex CLI не найден. Установи: npm install -g @openai/codex — затем codex login.";
+    return U().not_installed;
   }
   if (c.reason === "not_logged_in") {
-    return "Codex установлен, но не авторизован. Выполни в терминале: codex login (вход через ChatGPT-аккаунт по OAuth).";
+    return U().not_logged_in;
+  }
+  if (c.reason === "probe_timeout") {
+    return U().probe_timeout;
   }
   return null;
 }
 
 function fmtJob(j) {
   const dur = j.finishedAt
-    ? `${humanAge(j.startedAt)} назад, завершена`
-    : `идёт ${humanAge(j.startedAt)}`;
+    ? U().job_finished_ago(humanAge(j.startedAt))
+    : U().job_running_for(humanAge(j.startedAt));
   return `${j.id}  [${j.status}]  ${j.mode}${j.model ? ` (${j.model})` : ""}  — ${dur}${j.label ? `\n    ${j.label}` : ""}`;
 }
 
@@ -264,7 +242,7 @@ function renderTrail(entries, { detail = false } = {}) {
     }
     budget -= line.length;
     if (budget < 0) {
-      lines.push("  · […лента обрезана, полный журнал — codex_progress]");
+      lines.push(U().trail_truncated);
       break;
     }
     lines.push(line);
@@ -275,7 +253,12 @@ function renderTrail(entries, { detail = false } = {}) {
 /** Ответ модели вместе с тем, как она к нему шла. */
 function renderRun(jobId, answer, { detail = true } = {}) {
   const trail = renderTrail(jobTrail(jobId, { limit: 60 }), { detail });
-  return (trail ? `Ход работы GPT (сводки, не полные рассуждения):\n${trail}\n\n` : "") + `Ответ GPT:\n\n${answer}`;
+  return (trail ? `${U().trail_header}
+${trail}
+
+` : "") + `${U().answer_header}
+
+${answer}`;
 }
 
 // -------------------------------------------------------------------- вызовы
@@ -293,24 +276,34 @@ function applyDefaults(args, cwd) {
   };
 }
 
+/**
+ * Отказы «занято» — не сбой сервера, а нормальный ответ: предел параллельных
+ * задач или занятый тред чата. Без этого они уходили клиенту как -32603.
+ */
 async function handleTool(name, args, ctx = {}) {
-  const problem = guard();
-  if (problem) return err(problem);
+  try {
+    return await dispatchTool(name, args, ctx);
+  } catch (e) {
+    if (e?.busy) return err(e.message || String(e));
+    throw e;
+  }
+}
+
+async function dispatchTool(name, args, ctx = {}) {
+  if (CLI_TOOLS.has(name)) {
+    const problem = await guard();
+    if (problem) return err(problem);
+  }
   const cwd = envClean("CODEX_BRIDGE_CWD") || envClean("CLAUDE_PROJECT_DIR") || process.cwd();
 
   if (args.effort) {
     const bad = validateEffort(args.model, args.effort);
-    if (bad) return err(`${bad}\nПолный список — инструмент codex_models.`);
+    if (bad) return err(U().effort_hint(bad));
   }
 
   if (args.model) {
     const k = knownModel(args.model);
-    if (!k.known) {
-      return err(
-        `Модель "${args.model}" отсутствует в каталоге Codex.\nДоступны: ${k.available.join(", ")}\n` +
-          `Полный список с описаниями — инструмент codex_models.`
-      );
-    }
+    if (!k.known) return err(U().unknown_model(args.model, k.available.join(", ")));
   }
 
   switch (name) {
@@ -320,13 +313,13 @@ async function handleTool(name, args, ctx = {}) {
         { mode: "ask", cwd, ...args, ...applyDefaults(args, cwd) },
         { waitMs, onEvent: notifier(ctx), signal: ctx.signal }
       );
-      if (r.aborted) return text(`Вызов отменён, задача ${r.job.id} остановлена.`);
+      if (r.aborted) return text(U().cancelled(r.job.id));
       if (r.timedOut) {
         // Работа не перезапускается: тот же процесс продолжает идти в фоне.
         return text(
-          `GPT не уложился в ${Math.round(waitMs / 1000)}с — та же работа продолжается в фоне: ${r.job.id}\n\n` +
+          `${U().timed_out(Math.round(waitMs / 1000), r.job.id)}\n\n` +
             `${renderTrail(jobTrail(r.job.id, { limit: 20 }))}\n\n` +
-            `Смотри ход работы: codex_progress. Забрать ответ: codex_result.`
+            U().follow_answer
         );
       }
       if (!r.ok) return err(r.error);
@@ -334,10 +327,10 @@ async function handleTool(name, args, ctx = {}) {
     }
 
     case "codex_chat": {
-      if (!args.message) return err("Нужно поле message.");
+      if (!args.message) return err(U().need_message);
       const slug = args.chat || "default";
       if (!isValidSlug(slug)) {
-        return err(`Недопустимое имя чата: ${JSON.stringify(slug)}. Разрешены латиница, цифры, точка, дефис.`);
+        return err(U().bad_chat_name(JSON.stringify(slug)));
       }
       const waitMs = Math.max(10, Number(args.wait_seconds) || 120) * 1000;
 
@@ -368,11 +361,10 @@ async function handleTool(name, args, ctx = {}) {
             { waitMs, onEvent: notifier(ctx), signal: ctx.signal }
           );
 
-          if (r.aborted) return text(`Вызов отменён, задача ${r.job.id} остановлена. Тред "${slug}" не изменён.`);
+          if (r.aborted) return text(U().cancelled_chat(r.job.id, slug));
           if (r.timedOut) {
             return text(
-              `Модель не уложилась в ${Math.round(waitMs / 1000)}с — работа продолжается в фоне: ${r.job.id}\n` +
-                `Ответ придёт в тред "${slug}" — забери его через codex_result, потом продолжай разговор.\n\n` +
+              `${U().chat_timed_out(Math.round(waitMs / 1000), r.job.id, slug)}\n\n` +
                 renderTrail(jobTrail(r.job.id, { limit: 20 }))
             );
           }
@@ -385,11 +377,7 @@ async function handleTool(name, args, ctx = {}) {
                 r.error || ""
               )
             ) {
-              return err(
-                `Тред "${slug}" (${chat.threadId}) не удалось продолжить — Codex его не нашёл.\n` +
-                  `Сессия могла быть удалена или запись велась с другим CODEX_HOME.\n` +
-                  `Забудь разговор (codex_chats с forget: "${slug}") и начни заново.\n\n${r.error}`
-              );
+              return err(U().chat_thread_lost(slug, chat.threadId, r.error));
             }
             return err(r.error);
           }
@@ -406,7 +394,7 @@ async function handleTool(name, args, ctx = {}) {
             updatedAt: new Date().toISOString(),
           });
 
-          const head = `Чат "${slug}"${model ? ` · ${model}` : ""} · ход ${(chat?.turns || 0) + 1}${threadId ? "" : "\n(тред не сохранён: Codex не сообщил id сессии — следующий ход начнёт разговор заново)"}`;
+          const head = U().chat_head(slug, model, (chat?.turns || 0) + 1, !threadId);
           return text(`${head}\n\n${renderRun(r.job.id, r.output)}`);
         });
       } catch (e) {
@@ -417,19 +405,18 @@ async function handleTool(name, args, ctx = {}) {
 
     case "codex_chats": {
       if (args.forget) {
-        if (!isValidSlug(args.forget)) return err(`Недопустимое имя чата: ${JSON.stringify(args.forget)}`);
+        if (!isValidSlug(args.forget)) return err(U().bad_chat_name(JSON.stringify(args.forget)));
         return deleteChat(args.forget)
-          ? text(`Разговор "${args.forget}" забыт. Следующее сообщение начнёт новый тред.`)
-          : err(`Разговор "${args.forget}" не найден.`);
+          ? text(U().chat_forgotten(args.forget))
+          : err(U().chat_not_found(args.forget));
       }
       const chats = listChats();
-      if (!chats.length) return text("Разговоров с моделями Codex пока нет.");
+      if (!chats.length) return text(U().no_chats);
       return text(
         chats
           .map(
             (c) =>
-              `${c.slug}${c.model ? ` · ${c.model}` : ""}${c.effort ? ` · ${c.effort}` : ""} — ходов ${c.turns || 0}, ` +
-              `обновлён ${humanAge(c.updatedAt)} назад${c.threadId ? "" : " (тред не сохранён)"}\n    ${c.cwd}`
+              U().chat_line(c.slug, c.model, c.effort, c.turns || 0, humanAge(c.updatedAt), !c.threadId, c.cwd)
           )
           .join("\n")
       );
@@ -439,13 +426,12 @@ async function handleTool(name, args, ctx = {}) {
       const repo = repoKey(cwd);
       if (args.clear) {
         writePrefs(repo, { model: null, effort: null });
-        return text("Сброшено. Дальше действуют значения из настроек плагина.");
+        return text(U().prefs_cleared);
       }
       if (!args.model && !args.effort) {
         const p = readPrefs(repo);
         return text(
-          `Для этого репозитория: модель ${p.model || "(из настроек плагина)"}, effort ${p.effort || "(из настроек плагина)"}.\n` +
-            `Это значение проекта, а не конкретного окна Claude: надёжного идентификатора сессии у MCP-вызова нет.`
+          U().prefs_current(p.model || U().from_settings, p.effort || U().from_settings)
         );
       }
       const p = writePrefs(repo, {
@@ -453,14 +439,13 @@ async function handleTool(name, args, ctx = {}) {
         effort: args.effort === undefined ? undefined : args.effort || null,
       });
       return text(
-        `Дальше по умолчанию: модель ${p.model || "(из настроек плагина)"}, effort ${p.effort || "(из настроек плагина)"}.\n` +
-          `Действует для репозитория ${repo}, а не только для этого окна Claude.`
+        U().prefs_set(p.model || U().from_settings, p.effort || U().from_settings, repo)
       );
     }
 
     case "codex_progress": {
       const j = resolveJob(args.job_id, cwd);
-      if (!j) return err("Задача не найдена. Список — codex_status.");
+      if (!j) return err(U().job_not_found);
 
       // Ожидание новых событий: то же наблюдение, что и у синхронного вызова,
       // но по уже запущенной задаче.
@@ -475,55 +460,80 @@ async function handleTool(name, args, ctx = {}) {
       const p = jobProgress(j.id, { limit: Number(args.limit) || 12 });
       if (!p.hasEvents) {
         return text(
-          `${j.id} [${j.status}] — событий пока нет (${humanAge(j.startedAt)} с запуска).\n` +
-            `Если Codex запущен без поддержки --json, лента недоступна; используй codex_result по завершении.`
+          U().no_events_yet(j.id, j.status, humanAge(j.startedAt))
         );
       }
       const entries = jobTrail(j.id, { limit: Number(args.limit) || 12 });
       return text(
-        `${j.id} [${j.status}], идёт ${humanAge(j.startedAt)}\n\n` +
+        `${U().progress_head(j.id, j.status, humanAge(j.startedAt))}\n\n` +
           renderTrail(entries, { detail: args.detail === true }) +
-          (p.finished ? "\n\nРабота завершена — забери результат через codex_result." : "")
+          (p.finished ? U().progress_finished : "")
       );
     }
 
     case "codex_review":
     case "codex_challenge": {
       const mode = name === "codex_review" ? "review" : "challenge";
+      const backend = mode === "review" ? reviewBackend() : "exec";
       const background = args.background !== false;
+      // Сбор контекста теперь отказывает явно: не репозиторий, несуществующая
+      // база, сбойный git. Раньше любая из этих причин давала пустой диф и
+      // ревью «ни о чём», поэтому отказ доносим как есть, а не как сбой сервера.
+      // Промпт строится здесь же и передаётся готовым: иначе git-диф собирался
+      // бы дважды — на проверке и на запуске.
+      let prompt = null;
+      let diffError = null;
+      try {
+        prompt = buildPrompt({ mode, cwd, ...args });
+      } catch (e) {
+        diffError = e;
+      }
+      // Нативный reviewer получает структурную цель и диф не читает. Отказ
+      // сбора отнимает у него только запасной путь через exec, поэтому
+      // блокировать им весь вызов значило бы отказывать работоспособному ревью.
+      if (diffError && backend !== "app-server") {
+        return err(U().diff_failed(diffError?.message || diffError));
+      }
+      const spec = {
+        mode,
+        cwd,
+        ...args,
+        ...applyDefaults(args, cwd),
+        prompt,
+        allowFallback: !diffError,
+        backend,
+        reviewTarget: backend === "app-server" ? appServerReviewTarget(args) : null,
+      };
       if (!background) {
-        const r = await runJob(
-          { mode, cwd, ...args, ...applyDefaults(args, cwd) },
-          { waitMs: 480_000, onEvent: notifier(ctx), signal: ctx.signal }
-        );
-        if (r.aborted) return text(`Вызов отменён, задача ${r.job.id} остановлена.`);
-        if (r.timedOut) return text(`Не уложилось в 8 минут — работа продолжается в фоне: ${r.job.id}`);
+        const r = await runJob(spec, { waitMs: 480_000, onEvent: notifier(ctx), signal: ctx.signal });
+        if (r.aborted) return text(U().cancelled(r.job.id));
+        if (r.timedOut) return text(U().review_timed_out(r.job.id));
         return r.ok ? text(renderRun(r.job.id, r.output)) : err(r.error);
       }
-      const job = startJob({ mode, cwd, ...args, ...applyDefaults(args, cwd) });
+      const job = startJob(spec);
       return text(
-        `Запущено ${mode === "review" ? "ревью" : "состязательное ревью"} в фоне: ${job.id}\nСледить: codex_progress. Забрать результат: codex_result.`
+        U().review_started(mode !== "review", job.id)
       );
     }
 
     case "codex_delegate": {
-      if (!args.task) return err("Нужно поле task.");
+      if (!args.task) return err(U().need_task);
       const spec = { mode: "delegate", cwd, ...args, ...applyDefaults(args, cwd) };
       // Ноль — прежнее поведение: сразу в фон, без ожидания.
       const waitMs = args.wait_seconds === undefined ? 120_000 : Math.max(0, Number(args.wait_seconds) || 0) * 1000;
       if (waitMs <= 0) {
         const job = startJob(spec);
         return text(
-          `Задача делегирована GPT: ${job.id}\nGPT работает в рабочей директории и может менять файлы. Следить: codex_progress.`
+          U().delegated(job.id)
         );
       }
       const r = await runJob(spec, { waitMs, onEvent: notifier(ctx), signal: ctx.signal });
-      if (r.aborted) return text(`Вызов отменён, задача ${r.job.id} остановлена.`);
+      if (r.aborted) return text(U().cancelled(r.job.id));
       if (r.timedOut) {
         return text(
-          `GPT не уложился в ${Math.round(waitMs / 1000)}с — та же работа продолжается в фоне: ${r.job.id}\n\n` +
+          `${U().timed_out(Math.round(waitMs / 1000), r.job.id)}\n\n` +
             `${renderTrail(jobTrail(r.job.id, { limit: 20 }))}\n\n` +
-            `Смотри ход работы: codex_progress. Забрать результат: codex_result.`
+            U().follow_result
         );
       }
       if (!r.ok) return err(r.error);
@@ -538,43 +548,43 @@ async function handleTool(name, args, ctx = {}) {
     case "codex_status": {
       if (args.job_id) {
         const j = resolveJob(args.job_id, cwd);
-        if (!j) return err(`Задача ${args.job_id} не найдена.`);
+        if (!j) return err(U().job_not_found_id(args.job_id));
         const p = jobProgress(j.id, { limit: 10 });
         const body = p.hasEvents
           ? renderTrail(jobTrail(j.id, { limit: 10 }))
-          : jobOutput(j.id, { tail: 15 }) || "(пока пусто)";
-        return text(`${fmtJob(j)}\n\n--- ход работы ---\n${body}`);
+          : jobOutput(j.id, { tail: 15 }) || U().empty_so_far;
+        return text(`${fmtJob(j)}\n\n${U().trail_section}\n${body}`);
       }
       const jobs = listJobs(cwd).slice(0, 10);
-      if (!jobs.length) return text("Фоновых задач Codex в этом репозитории нет.");
+      if (!jobs.length) return text(U().no_jobs);
       return text(jobs.map(fmtJob).join("\n"));
     }
 
     case "codex_result": {
       const j = resolveJob(args.job_id, cwd);
-      if (!j) return err("Задача не найдена.");
+      if (!j) return err(U().job_not_found);
       if (j.status === "running") {
         return text(
-          `${j.id} ещё выполняется (${humanAge(j.startedAt)}).\n\n` +
+          `${U().still_running(j.id, humanAge(j.startedAt))}\n\n` +
             (renderTrail(jobTrail(j.id, { limit: 10 })) || jobOutput(j.id, { tail: 30 }))
         );
       }
       const r = jobResult(j.id);
       if (!r.ok) return err(r.error);
       const answer = jobAnswer(j.id) || jobOutput(j.id, args.tail ? { tail: args.tail } : {});
-      return text(`${j.id} [${j.status}] — ${j.mode}\n\n${renderRun(j.id, answer || "(вывод пуст)")}`);
+      return text(`${j.id} [${j.status}] — ${j.mode}\n\n${renderRun(j.id, answer || U().empty_output)}`);
     }
 
     case "codex_cancel": {
       const j = resolveJob(args.job_id, cwd);
-      if (!j) return err("Задача не найдена.");
+      if (!j) return err(U().job_not_found);
       const r = cancelJob(j.id);
-      return r.ok ? text(`${j.id}: ${r.note || "отменена."}`) : err(r.error);
+      return r.ok ? text(`${j.id}: ${r.note || U().cancelled_note}`) : err(r.error);
     }
 
     default:
-      return err(`Неизвестный инструмент: ${name}`);
+      return err(U().unknown_tool(name));
   }
 }
 
-serve({ name: "codex-bridge", tools: TOOLS, handle: handleTool });
+serve({ name: "codex-bridge", version: pluginVersion(), tools: TOOLS, handle: handleTool });

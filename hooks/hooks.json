@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/preflight.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/preflight.mjs\"",
+            "timeout": 15
           }
         ]
       }

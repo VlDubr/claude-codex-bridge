@@ -1,12 +1,13 @@
 ---
-description: Выбрать модель Codex по умолчанию для этого репозитория
-argument-hint: "[<модель>] [--effort <уровень>] [--clear]"
+description: Select the default Codex model for this repository
+argument-hint: "[<model>] [--effort <level>] [--clear]"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_use, mcp__plugin_codex-bridge_codex__codex_models
 ---
 
-Пользователь выбирает модель Codex: `$ARGUMENTS`
+The user is selecting a Codex model: `$ARGUMENTS`
 
-Вызови **codex_use**: первое слово — имя модели, `--effort` — уровень reasoning, `--clear` — сброс к настройкам плагина. Без аргументов покажи текущее значение.
+Call **codex_use**: the first word is the model name, `--effort` is the reasoning level, and `--clear` resets the selection to the plugin settings. With no arguments, show the current value.
 
-Если имя модели вызывает сомнения, сверься с **codex_models** — каталог отдаёт сам Codex.
+If the model name is uncertain, check **codex_models**—the catalog is provided by Codex itself.
 
-Скажи пользователю прямо: значение действует для репозитория, а не для конкретного окна Claude. Надёжного идентификатора сессии у MCP-вызова нет, поэтому выбор увидят и другие открытые окна в этом же проекте.
+Tell the user directly: this value applies to the repository, not to a specific Claude window. An MCP call has no reliable session identifier, so the selection will also be visible to other open windows in the same project.

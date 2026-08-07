@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { codexBinary, dataDir, envClean } from "./codex-core.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 часов
 const cachePath = () => path.join(path.dirname(dataDir()), "models-cache.json");
@@ -82,7 +83,7 @@ export function fetchModels({ force = false } = {}) {
   });
 
   if (r.error?.code === "ENOENT") {
-    return { ok: false, error: "Codex CLI не найден. Установи: npm install -g @openai/codex" };
+    return { ok: false, error: message("models_cli_not_found") };
   }
 
   const raw = (r.stdout || "").trim();
@@ -93,7 +94,14 @@ export function fetchModels({ force = false } = {}) {
     const start = raw.search(/[[{]/);
     if (start >= 0) {
       const tail = raw.slice(start);
-      for (let end = tail.length; end > 1; end = tail.lastIndexOf("}", end - 1) + 1 || tail.lastIndexOf("]", end - 1) + 1) {
+      // Каталог бывает массивом, а не объектом, поэтому границы ищутся по обеим
+      // закрывающим скобкам сразу: прежний перебор предпочитал последнюю «}» и
+      // пропускал более позднюю «]», то есть массив объектов не разбирался.
+      const ends = [];
+      for (let i = tail.length; i > 1; i--) {
+        if (tail[i - 1] === "}" || tail[i - 1] === "]") ends.push(i);
+      }
+      for (const end of ends) {
         try {
           const models = parseCatalog(JSON.parse(tail.slice(0, end)));
           if (models.length) {
@@ -101,7 +109,6 @@ export function fetchModels({ force = false } = {}) {
             return { ok: true, models, source: "codex debug models", complete: true };
           }
         } catch {}
-        if (end <= 1) break;
       }
     }
   }
@@ -126,7 +133,7 @@ export function fetchModels({ force = false } = {}) {
     return {
       ok: true,
       models: stale.models,
-      source: `${stale.source} (устаревший кэш)`,
+      source: message("models_stale_source", stale.source),
       complete: stale.complete !== false,
       degraded: true,
     };
@@ -134,11 +141,7 @@ export function fetchModels({ force = false } = {}) {
 
   return {
     ok: false,
-    error:
-      `Не удалось получить список моделей. \`codex debug models\` вернул ` +
-      `${r.status === 0 ? "неразобранный вывод" : `код ${r.status}`}` +
-      `${(r.stderr || "").trim() ? `: ${(r.stderr || "").trim().slice(0, 300)}` : ""}. ` +
-      `Проверь версию Codex и авторизацию (codex login status).`,
+    error: message("models_fetch_failed", r.status, (r.stderr || "").trim()),
   };
 }
 
@@ -201,17 +204,11 @@ export function effortsFor(id) {
 export function validateEffort(model, effort) {
   if (!effort) return null;
   if (!EFFORT_LEVELS.includes(effort)) {
-    return (
-      `Уровень усилий "${effort}" не входит в известный набор: ${EFFORT_LEVELS.join(", ")}. ` +
-      `Точный список для модели — инструмент codex_models.`
-    );
+    return message("effort_unknown", effort, EFFORT_LEVELS);
   }
   const supported = effortsFor(model || envClean("CODEX_BRIDGE_MODEL"));
   if (supported && !supported.includes(effort)) {
-    return (
-      `Модель ${model || envClean("CODEX_BRIDGE_MODEL")} не принимает уровень усилий "${effort}". ` +
-      `Поддерживаются: ${supported.join(", ")}.`
-    );
+    return message("effort_unsupported", model || envClean("CODEX_BRIDGE_MODEL"), effort, supported);
   }
   return null;
 }
@@ -222,15 +219,15 @@ export function formatModels(r) {
     const bits = [m.id];
     if (m.label && m.label !== m.id) bits.push(`— ${m.label}`);
     if (m.efforts?.length) bits.push(`[effort: ${m.efforts.join(", ")}]`);
-    else bits.push("[effort: не объявлен каталогом]");
-    if (m.default) bits.push("(по умолчанию)");
+    else bits.push(message("models_effort_missing"));
+    if (m.default) bits.push(message("models_default"));
     return "  " + bits.join(" ");
   });
   return [
-    `Модели Codex (источник: ${r.source}${r.cached ? ", из кэша" : ""}):`,
+    message("models_header", r.source, r.cached),
     ...lines,
     r.complete === false
-      ? "\nВнимание: каталог неполный (получен обходным путём). Имена моделей не проверяются на существование."
+      ? message("models_incomplete")
       : "",
   ]
     .filter(Boolean)

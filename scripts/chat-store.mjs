@@ -9,14 +9,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "./codex-core.mjs";
+import { message } from "./i18n-runtime.mjs";
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,48}$/i;
 const THREAD_RE = /^[0-9a-fA-F-]{8,64}$/;
 // Замок протухает: процесс мог упасть, не сняв его, и тогда чат остался бы
-// заблокированным навсегда.
-const LOCK_STALE_MS = 15 * 60_000;
+// заблокированным навсегда. Владелец обновляет метку времени, пока идёт ход,
+// поэтому порог не обязан покрывать таймаут задачи целиком — прежние 15 минут
+// были короче него и снимали замок с ещё работающего хода.
+const LOCK_STALE_MS = 2 * 60_000;
+const LOCK_TOUCH_MS = 20_000;
 
 export function chatsDir() {
   const dir = path.join(path.dirname(dataDir()), "chats");
@@ -33,10 +37,10 @@ export function isValidThreadId(id) {
 }
 
 function chatPath(slug, ext = "json") {
-  if (!isValidSlug(slug)) throw new Error(`Недопустимое имя чата: ${JSON.stringify(slug)}`);
+  if (!isValidSlug(slug)) throw new Error(message("chat_invalid_name", slug));
   const dir = chatsDir();
   const p = path.resolve(dir, `${slug}.${ext}`);
-  if (path.dirname(p) !== path.resolve(dir)) throw new Error(`Путь чата вышел за пределы каталога: ${slug}`);
+  if (path.dirname(p) !== path.resolve(dir)) throw new Error(message("chat_path_outside", slug));
   return p;
 }
 
@@ -86,32 +90,57 @@ export function deleteChat(slug) {
  */
 export async function withChatLock(slug, fn) {
   const lock = chatPath(slug, "lock");
-  try {
-    fs.mkdirSync(lock);
-  } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-    let age = Infinity;
+  const busy = (key) => {
+    const err = new Error(message(key, slug));
+    err.busy = true;
+    return err;
+  };
+
+  // Две попытки: между снятием протухшего замка и захватом успевает вклиниться
+  // другой процесс, и это нормальный исход, а не отказ.
+  for (let attempt = 0; ; attempt++) {
     try {
-      age = Date.now() - fs.statSync(lock).mtimeMs;
-    } catch {}
-    if (age < LOCK_STALE_MS) {
-      const err = new Error(`Чат "${slug}" сейчас занят другим ходом. Дождись ответа или начни новый чат.`);
-      err.busy = true;
-      throw err;
-    }
-    // Замок протух — снимаем и берём заново.
-    try {
-      fs.rmdirSync(lock);
       fs.mkdirSync(lock);
-    } catch {
-      const err = new Error(`Не удалось снять устаревший замок чата "${slug}".`);
-      err.busy = true;
-      throw err;
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      let age = Infinity;
+      try {
+        age = Date.now() - fs.statSync(lock).mtimeMs;
+      } catch {}
+      if (age < LOCK_STALE_MS) throw busy("chat_busy");
+      if (attempt >= 1) throw busy("chat_stale_lock");
+      // Снятие через переименование: удалить и создать заново — две операции,
+      // между которыми замок успевает взять другой процесс, и тогда следующий
+      // rmdir снимает уже чужой живой замок.
+      try {
+        fs.renameSync(lock, `${lock}.stale.${process.pid}.${Date.now()}`);
+      } catch {}
+      try {
+        const dir = path.dirname(lock);
+        const prefix = `${path.basename(lock)}.stale.`;
+        for (const name of fs.readdirSync(dir)) {
+          if (name.startsWith(prefix)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+        }
+      } catch {}
     }
   }
+
+  // Ход длится минутами, а замок обязан выглядеть живым всё это время: без
+  // обновления метки его снял бы соседний вызов и запустил второй exec resume
+  // в тот же тред.
+  const beat = setInterval(() => {
+    try {
+      const now = new Date();
+      fs.utimesSync(lock, now, now);
+    } catch {}
+  }, LOCK_TOUCH_MS);
+  beat.unref?.();
+
   try {
     return await fn();
   } finally {
+    clearInterval(beat);
     try {
       fs.rmdirSync(lock);
     } catch {}

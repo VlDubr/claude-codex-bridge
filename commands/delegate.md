@@ -1,12 +1,13 @@
 ---
-description: Делегировать задачу GPT — он исследует и починит сам
-argument-hint: "[--model <модель>] [--effort <уровень>] <описание задачи>"
+description: Delegate a task to GPT to investigate and fix independently
+argument-hint: "[--model <model>] [--effort <level>] <task description>"
+allowed-tools: mcp__plugin_codex-bridge_codex__codex_delegate
 ---
 
-Пользователь делегирует задачу GPT. Аргументы: `$ARGUMENTS`
+The user is delegating a task to GPT. Arguments: `$ARGUMENTS`
 
-Перед вызовом убедись, что задача сформулирована так, что её поймёт модель без твоего контекста. Если в описании есть отсылки к текущему разговору («почини это», «тот баг»), разверни их в самодостаточный текст: какой файл, какая ошибка, как воспроизвести, что уже пробовали.
+Before calling the tool, make sure the task is phrased so the model can understand it without your context. If the description refers back to the current conversation (“fix this,” “that bug”), expand those references into a self-contained prompt: which file, what error, how to reproduce it, and what has already been tried.
 
-Затем вызови **codex_delegate** с полем `task`, а также `model`/`effort`, если они переданы флагами.
+Then call **codex_delegate** with the `task` field, as well as `model`/`effort` if they were provided as flags.
 
-GPT работает в той же рабочей директории и **может изменять файлы**. Предупреди об этом пользователя одной строкой и посоветуй закоммитить или застэшить текущую работу, если она не сохранена. Сообщи job_id и остановись — не жди завершения.
+GPT works in the same working directory and **can modify files**. Warn the user about this in one line and advise them to commit or stash their current work if it has not been saved. Report the job_id and stop—do not wait for completion.

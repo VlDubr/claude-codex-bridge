@@ -147,9 +147,11 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 | Параметр | Что задаёт |
 |---|---|
 | `default_model` | Модель Codex по умолчанию. Список — `/codex-bridge:models` |
-| `default_effort` | Уровень reasoning: `low`, `medium`, `high`, `xhigh`, `max`. Точный набор зависит от модели — см. `/codex-bridge:models` |
+| `default_effort` | Уровень reasoning: `none`, `low`, `medium`, `high`, `xhigh`, `max`. Точный набор зависит от модели — см. `/codex-bridge:models` |
+| `review_backend` | Транспорт ревью: по умолчанию `exec`; `app-server` явно включает нативный reviewer с безопасным fallback до принятия запроса |
 | `reasoning_summary` | `detailed` — подробные сводки размышлений в ленте, `auto` — как решит Codex (сводок может не быть) |
 | `progress_notifications` | Показывать ход работы прямо во время вызова. Выключите, если ваша сборка Claude Code рвёт соединение на таких уведомлениях — см. «Если что-то пошло не так» |
+| `max_parallel_jobs` | Сколько задач Codex можно выполнять одновременно (по умолчанию 4; `0` снимает предел) |
 | `job_timeout_minutes` | Через сколько убивать зависшую фоновую задачу (по умолчанию 30) |
 | `image_output_dir` | Куда складывать изображения (по умолчанию `assets/generated`) |
 | `image_timeout_minutes` | Таймаут генерации картинки (по умолчанию 15) |
@@ -274,7 +276,7 @@ codex login                    # вход через аккаунт ChatGPT, OAu
 Архитектура, внутреннее устройство, тесты и публикация — в **[README_DEV.ru.md](README_DEV.ru.md)**.
 
 ```bash
-node tests/regressions.mjs   # 27 тестов, реальные codex/claude не нужны
+node tests/regressions.mjs   # самодостаточные тесты; реальные codex и claude не нужны
 ```
 
 Запуск без установки: `claude --plugin-dir /путь/к/claude-codex-bridge`
