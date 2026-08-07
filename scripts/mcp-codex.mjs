@@ -3,6 +3,7 @@
 // Транспорт — общий mcp-lib.mjs, без внешних зависимостей.
 
 import { serve, text, fail as err } from "./mcp-lib.mjs";
+import { pluginVersion } from "./version.mjs";
 import {
   checkCodex,
   runJob,
@@ -577,4 +578,4 @@ async function handleTool(name, args, ctx = {}) {
   }
 }
 
-serve({ name: "codex-bridge", tools: TOOLS, handle: handleTool });
+serve({ name: "codex-bridge", version: pluginVersion(), tools: TOOLS, handle: handleTool });

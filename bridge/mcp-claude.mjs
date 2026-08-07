@@ -11,6 +11,7 @@
 
 import { spawnSync } from "node:child_process";
 import { serve, text, fail } from "../scripts/mcp-lib.mjs";
+import { pluginVersion } from "../scripts/version.mjs";
 import { ToolProxy, readExposed } from "./tool-proxy.mjs";
 
 const cleanEnv = (n) => {
@@ -239,4 +240,4 @@ ${write ? "Ты можешь изменять файлы." : "Работай т�
 
 process.on("exit", () => proxy.stop());
 
-serve({ name: "claude-bridge", version: "0.3.0", tools: TOOLS, handle });
+serve({ name: "claude-bridge", version: pluginVersion(), tools: TOOLS, handle });

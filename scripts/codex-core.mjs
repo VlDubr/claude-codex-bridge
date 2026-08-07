@@ -14,6 +14,8 @@ import {
   parseLine,
   normalizeStream,
   threadIdOf,
+  hasStreamTags,
+  streamText,
 } from "./codex-events.mjs";
 import { alive, killTree } from "./proc.mjs";
 
@@ -704,12 +706,18 @@ export function jobResult(id) {
   const parsed = extractOutput(raw);
   const out = denoise(parsed.text);
   const trail = progressTrail(parsed.events, { limit: 8 });
-  // Всё, что не JSON — это stderr Codex: там и лежат объяснимые отказы.
+  // Диагностика Codex лежит в stderr. Воркер помечает происхождение строк,
+  // поэтому её больше не приходится угадывать по «строка начинается с {»:
+  // на старом Codex без --json такой признак не работал вовсе и весь вывод
+  // одновременно считался и ответом, и шумом. Журналы прежних версий читаются
+  // по старому правилу — иначе фоновые задачи, пережившие обновление, ослепнут.
   const noise = denoise(
-    raw
-      .split("\n")
-      .filter((l) => !l.trim().startsWith("{"))
-      .join("\n")
+    hasStreamTags(parsed.events)
+      ? streamText(parsed.events, "stderr")
+      : raw
+          .split("\n")
+          .filter((l) => !l.trim().startsWith("{"))
+          .join("\n")
   );
 
   if (job.status === "done") return { ok: true, job, output: out, stderr: noise, trail };

@@ -3,6 +3,7 @@
 
 import path from "node:path";
 import { serve, text, fail } from "./mcp-lib.mjs";
+import { pluginVersion } from "./version.mjs";
 import { checkCodex, envClean } from "./codex-core.mjs";
 import {
   generateImage,
@@ -99,4 +100,4 @@ async function handle(name, args) {
   );
 }
 
-serve({ name: "codex-bridge-image", tools: TOOLS, handle });
+serve({ name: "codex-bridge-image", version: pluginVersion(), tools: TOOLS, handle });

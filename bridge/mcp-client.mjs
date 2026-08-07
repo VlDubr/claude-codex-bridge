@@ -4,6 +4,7 @@
 
 import { spawn } from "node:child_process";
 import readline from "node:readline";
+import { pluginVersion } from "../scripts/version.mjs";
 
 const PROTOCOL = "2025-06-18";
 
@@ -94,7 +95,7 @@ export class McpStdioClient {
     await this.#request("initialize", {
       protocolVersion: PROTOCOL,
       capabilities: {},
-      clientInfo: { name: "codex-bridge", version: "0.3.0" },
+      clientInfo: { name: "codex-bridge", version: pluginVersion() },
     });
     this.#send({ jsonrpc: "2.0", method: "notifications/initialized" });
 

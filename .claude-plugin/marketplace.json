@@ -1,5 +1,6 @@
 {
   "name": "claude-codex-bridge",
+  "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, делегирование задач, разговор с моделями GPT и генерация изображений на подписке ChatGPT, без API-ключей.",
   "owner": {
     "name": "VlDubr",
     "url": "https://github.com/VlDubr"

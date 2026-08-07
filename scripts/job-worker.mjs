@@ -14,6 +14,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { killTree } from "./proc.mjs";
+import { STDOUT_LINE, STDERR_LINE } from "./codex-events.mjs";
 
 const FILE_MODE = 0o600;
 
@@ -72,20 +73,26 @@ try {
 child.stdin.on("error", () => {}); // закрытый stdin не должен ронять воркер
 
 // Метку времени ставит воркер: сам Codex её в событиях не передаёт.
+const stamp = () => new Date().toISOString();
+const tagged = (type, text) => append(JSON.stringify({ type, text, _ts: stamp() }));
+
 readline.createInterface({ input: child.stdout }).on("line", (line) => {
   const t = line.trim();
   if (!t) return;
   if (t.startsWith("{")) {
     try {
       const e = JSON.parse(t);
-      if (e && typeof e === "object") return append(JSON.stringify({ ...e, _ts: new Date().toISOString() }));
+      if (e && typeof e === "object") return append(JSON.stringify({ ...e, _ts: stamp() }));
     } catch {}
   }
-  append(t); // не JSON — сохраняем как есть, деградация без потери вывода
+  // Не JSON — сохраняем без потери, но с меткой потока: журнал один, и без
+  // метки вывод модели потом не отделить от её же диагностики.
+  tagged(STDOUT_LINE, t);
 });
 
 readline.createInterface({ input: child.stderr }).on("line", (line) => {
-  if (line.trim()) append(line);
+  const t = line.trim();
+  if (t) tagged(STDERR_LINE, t);
 });
 
 const limit = Number(spec.timeoutMs) || 0;

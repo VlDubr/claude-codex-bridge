@@ -26,6 +26,29 @@ export function parseStream(text) {
     .filter(Boolean);
 }
 
+// Воркер ведёт один журнал на задачу, но stdout и stderr в нём надо различать:
+// без --json Codex печатает ответ обычным текстом, и его собственная
+// диагностика подмешивалась в ответ модели. Поэтому строки, не являющиеся
+// событиями, воркер оборачивает и помечает происхождением.
+export const STDOUT_LINE = "stream.stdout";
+export const STDERR_LINE = "stream.stderr";
+
+/** Строки одного потока в порядке появления. Пусто, если журнал без меток. */
+export function streamText(raw, source) {
+  const events = Array.isArray(raw) ? raw : parseStream(raw);
+  const type = source === "stderr" ? STDERR_LINE : STDOUT_LINE;
+  return events
+    .filter((e) => e.type === type)
+    .map((e) => String(e.text ?? ""))
+    .join("\n");
+}
+
+/** Журнал помечен воркером — значит потоки разделимы. */
+export function hasStreamTags(raw) {
+  const events = Array.isArray(raw) ? raw : parseStream(raw);
+  return events.some((e) => e.type === STDOUT_LINE || e.type === STDERR_LINE);
+}
+
 /** Транзиентные реконнекты Codex шлёт как error — это не отказ. */
 export function isFatalError(e) {
   if (e.type === "turn.failed") return true;
@@ -63,6 +86,7 @@ const cmdOf = (it) => String(it.command || "").replace(/^bash -lc\s*/, "");
  */
 export function normalize(e) {
   if (!e || typeof e.type !== "string") return null;
+  if (e.type === STDOUT_LINE || e.type === STDERR_LINE) return null; // служебная метка, не шаг работы
   const ts = e._ts || null;
   const at = (o) => ({ ts, ...o });
 
@@ -228,7 +252,10 @@ export function extractOutput(raw) {
   const events = parseStream(raw);
   if (!events.length) return { text: String(raw || "").trim(), events: [] };
   const msg = finalMessage(events);
-  return { text: msg ?? "", events };
+  if (msg !== null) return { text: msg, events };
+  // Ответа-события нет: значит Codex печатал текстом. Берём только stdout —
+  // stderr помечен отдельно и в ответ модели попадать не должен.
+  return { text: streamText(events, "stdout").trim(), events };
 }
 
 /** Компактная лента прогресса: что модель делала, в порядке появления. */

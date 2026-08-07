@@ -378,7 +378,40 @@ await tExec("7. runJob: частичный вывод при exit!=0 не выд
   assert.equal(r.ok, false, "частичный вывод принят за успех");
   assert.equal(r.exitCode, 7);
   assert.equal(r.partialOutput, "PARTIAL OUTPUT");
+  assert.ok(/fatal detail/.test(r.error || ""), "stderr не доехал до диагностики отказа");
   delete process.env.FAKE;
+});
+
+await t("7b. потоки в журнале различимы: stderr не подмешивается в ответ", async () => {
+  const ev = await import(`${ROOT_URL}/scripts/codex-events.mjs?st=${Date.now()}`);
+  const log = [
+    JSON.stringify({ type: ev.STDOUT_LINE, text: "ответ модели" }),
+    JSON.stringify({ type: ev.STDERR_LINE, text: "failed to load models cache" }),
+    JSON.stringify({ type: ev.STDOUT_LINE, text: "вторая строка" }),
+  ].join("\n");
+
+  assert.equal(ev.hasStreamTags(log), true);
+  assert.equal(ev.extractOutput(log).text, "ответ модели\nвторая строка", "stderr попал в ответ модели");
+  assert.equal(ev.streamText(log, "stderr"), "failed to load models cache");
+});
+
+await t("7c. служебные метки потоков не показываются как шаги работы", async () => {
+  const ev = await import(`${ROOT_URL}/scripts/codex-events.mjs?tr=${Date.now()}`);
+  const log = [
+    JSON.stringify({ type: "thread.started", thread_id: "t-1" }),
+    JSON.stringify({ type: ev.STDOUT_LINE, text: "сырая строка" }),
+    JSON.stringify({ type: ev.STDERR_LINE, text: "шум" }),
+  ].join("\n");
+
+  const trail = ev.progressTrail(log, { limit: 10 });
+  assert.deepEqual(trail, ["сессия открыта"], `метки утекли в ленту: ${JSON.stringify(trail)}`);
+});
+
+await t("7d. журнал прежнего формата читается по-старому", async () => {
+  const ev = await import(`${ROOT_URL}/scripts/codex-events.mjs?old=${Date.now()}`);
+  const log = ["голый текст без меток", JSON.stringify({ type: "turn.started" })].join("\n");
+  assert.equal(ev.hasStreamTags(log), false, "журнал без меток опознан как помеченный");
+  assert.equal(ev.streamText(log, "stdout"), "");
 });
 
 // ───────────────────────────────── 8. Права и секреты
@@ -1252,6 +1285,22 @@ await t("22c. чужой вывод не утекает в ленту целик
     item: { type: "command_execution", command: "cat big", aggregated_output: "z".repeat(50_000), exit_code: 0 },
   });
   assert.ok(big.detail.length < 5000, `вывод команды не усечён: ${big.detail.length}`);
+});
+
+// ───────────────────────────────── 23. Версия из единственного источника
+
+await t("23. версия MCP-серверов берётся из манифеста, а не из строки в коде", async () => {
+  const { pluginVersion } = await import(`${ROOT_URL}/scripts/version.mjs?v=${Date.now()}`);
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"));
+  assert.equal(pluginVersion(), manifest.version, "версия разошлась с манифестом");
+
+  // Три сервера и MCP-клиент раньше несли версию строкой и разъехались:
+  // plugin.json 0.4.1, claude-bridge 0.3.0, остальные — дефолт 0.1.0.
+  for (const f of ["scripts/mcp-codex.mjs", "scripts/mcp-image.mjs", "bridge/mcp-claude.mjs", "bridge/mcp-client.mjs"]) {
+    const src = fs.readFileSync(path.join(ROOT, f), "utf8");
+    assert.ok(/pluginVersion\(\)/.test(src), `${f} не берёт версию из манифеста`);
+    assert.ok(!/version:\s*"\d+\.\d+\.\d+"/.test(src), `${f} снова несёт версию строкой`);
+  }
 });
 
 // ───────────────────────────────── отчёт
