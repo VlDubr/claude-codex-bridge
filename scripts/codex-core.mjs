@@ -256,7 +256,13 @@ export function capabilities({ force = false } = {}) {
   }
 
   const help = spawnSync(codexBinary(), ["exec", "--help"], { encoding: "utf8", timeout: 15_000 });
-  const text = `${help.stdout || ""}${help.stderr || ""}`;
+  // Непустой вывод сам по себе ничего не доказывает: сломанный, зависший или
+  // незнакомый бинарь пишет в stderr текст ошибки, и он так же непуст. Приняв
+  // его за прочитанный help, мы получили бы caps сплошь false, buildArgs
+  // выродился бы в ["exec", "-"], и Codex ушёл бы работать в каталог процесса
+  // вместо каталога проекта. Пробой считается только штатно завершившийся help.
+  const probeOk = !help.error && help.status === 0;
+  const text = probeOk ? `${help.stdout || ""}${help.stderr || ""}` : "";
   const caps = {
     askForApproval: /--ask-for-approval/.test(text),
     sandbox: /--sandbox/.test(text),
@@ -274,6 +280,11 @@ export function capabilities({ force = false } = {}) {
     caps.cd = true;
     caps.image = true;
   }
+
+  // Неудачную пробу не запоминаем ни на диске, ни в памяти: иначе временно
+  // сломанный codex зафиксировал бы урезанные возможности до конца жизни
+  // процесса, а на диске — и после перезапуска. Следующий вызов попробует снова.
+  if (!caps.probed) return caps;
 
   try {
     fs.mkdirSync(path.dirname(cacheFile), { recursive: true, mode: DIR_MODE });
