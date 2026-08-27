@@ -12,8 +12,10 @@
       "description": "Claude Code ↔ Codex (ChatGPT): code review, delegation, debate, image generation. No API keys.",
       "category": "development",
       "keywords": [
+        "claude",
         "claude-code",
         "claude-code-plugin",
+        "anthropic",
         "codex",
         "openai-codex",
         "chatgpt",

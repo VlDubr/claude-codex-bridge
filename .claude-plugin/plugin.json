@@ -10,8 +10,10 @@
   },
   "license": "MIT",
   "keywords": [
+    "claude",
     "claude-code",
     "claude-code-plugin",
+    "anthropic",
     "codex",
     "openai-codex",
     "chatgpt",
