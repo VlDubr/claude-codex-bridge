@@ -571,9 +571,10 @@ const CORE = {
     not_authorized: "Codex is not authorised, or the session expired. Run in a terminal: codex login",
     quota: "The ChatGPT subscription limit is reached. Wait for the quota to reset or switch to a cheaper model.",
     unknown_flag: (flag) =>
-      `This Codex build does not know the ${flag} flag. The flag-detection cache is stale — ` +
-      `it is keyed by binary version and refreshes itself, but you can clear it by hand: ` +
-      `delete exec-caps.json in the plugin data directory.`,
+      `This Codex build does not know the ${flag} flag. Update the plugin: the codex exec flag set ` +
+      `changes between versions, and the bridge detects it from codex exec --help. ` +
+      `If the error survives the update, clear the detection cache: delete exec-caps.json ` +
+      `in the plugin data directory.`,
   },
 
   ru: {
@@ -662,9 +663,10 @@ const CORE = {
     not_authorized: "Codex не авторизован или сессия истекла. Выполни в терминале: codex login",
     quota: "Достигнут лимит подписки ChatGPT. Подожди сброса квоты или смени модель на более дешёвую.",
     unknown_flag: (flag) =>
-      `Эта сборка Codex не знает флаг ${flag}. Кэш определения флагов устарел — ` +
-      `он привязан к версии бинаря и обновится сам, но можно сбросить вручную: ` +
-      `удали exec-caps.json в каталоге данных плагина.`,
+      `Эта сборка Codex не знает флаг ${flag}. Обнови плагин: набор флагов codex exec меняется ` +
+      `между версиями, и мост определяет его по codex exec --help. ` +
+      `Если после обновления ошибка осталась — сбрось кэш определения: удали exec-caps.json ` +
+      `в каталоге данных плагина.`,
   },
 };
 

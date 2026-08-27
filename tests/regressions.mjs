@@ -176,6 +176,28 @@ await tExec("1b. --ask-for-approval добавляется, когда exec ег
   delete process.env.FAKE_HELP;
 });
 
+await t("1c. генерация изображений не добавляет --ask-for-approval без поддержки в exec", async () => {
+  const d = fresh("caps-image");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const image = await import(`${ROOT_URL}/scripts/image-core.mjs?caps3=${Date.now()}`);
+
+  const args = image.buildImageArgs({ cwd: d });
+  assert.ok(!args.includes("--ask-for-approval"), "флаг добавлен, хотя help его не содержит");
+  assert.ok(args.includes("--sandbox"), "--sandbox должен присутствовать");
+});
+
+await tExec("1d. генерация изображений добавляет --ask-for-approval, когда exec его поддерживает", async () => {
+  const d = fresh("caps-image2");
+  process.env.CODEX_BIN = fakeCodex(d);
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  process.env.FAKE_HELP = "Usage: codex exec\n  --sandbox <mode>\n  --ask-for-approval <policy>\n  --cd <dir>";
+  const image = await import(`${ROOT_URL}/scripts/image-core.mjs?caps4=${Date.now()}`);
+  const args = image.buildImageArgs({ cwd: d });
+  assert.ok(args.includes("--ask-for-approval"));
+  delete process.env.FAKE_HELP;
+});
+
 // ───────────────────────────────── 2. Терминальные статусы фоновых задач
 
 await tExec("2a. cancel не перезаписывается завершением процесса", async () => {
@@ -610,7 +632,9 @@ await t("9e. отказ API по уровню усилий объясняетс�
   assert.match(reason, /low/, "не перечислены поддерживаемые значения");
 
   assert.match(core.explainCodexFailure("Error: not logged in"), /codex login/);
-  assert.match(core.explainCodexFailure("error: unexpected argument '--ask-for-approval'"), /exec-caps\.json/);
+  const flag = core.explainCodexFailure("error: unexpected argument '--ask-for-approval'");
+  assert.match(flag, /--ask-for-approval/);
+  assert.match(flag, /Update the plugin|Обнови плагин/, "совет должен начинаться с обновления плагина");
 });
 
 // ───────────────── 14. Нераскрытые плейсхолдеры (найдено при первом запуске)
