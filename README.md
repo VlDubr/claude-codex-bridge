@@ -261,7 +261,7 @@ Note that `/codex-bridge:image` takes 4–6 minutes — Codex reasons first and 
 
 **On Windows: `orchestrator_helper_launch_failed` / `program not found`, or an unexplained "user cancelled MCP tool call"** — Codex's sandbox failed to start. This surfaces as an MCP failure or a user cancellation, so it reads like a dead bridge when the bridge is fine. The usual cause is a mixed Codex installation: the CLI is one version while the helpers in `~/.codex/.sandbox-bin` are another. Run `/codex-bridge:setup` — it compares the versions and names the mismatch. The fix is reinstalling Codex (`npm install -g @openai/codex`). As a stopgap you can enable the `bypass_sandbox` setting, but then Codex runs commands without isolation.
 
-**`unexpected argument '--...'`** — the `codex exec` flag set changed between versions. The plugin detects flags itself and caches them per binary version; if the cache is stale, delete `exec-caps.json` in the plugin data directory.
+**`unexpected argument '--...'`** — the `codex exec` flag set changed between versions. The first thing to try is updating the plugin: a build that passes a flag unconditionally cannot be repaired by clearing the cache. If the error survives the update, the detection cache is stale — it is keyed by binary version, but you can delete `exec-caps.json` in the plugin data directory by hand.
 
 **Environment diagnostics** — `/codex-bridge:setup` reports the Codex version, auth state, model catalog, and reverse bridge status.
 

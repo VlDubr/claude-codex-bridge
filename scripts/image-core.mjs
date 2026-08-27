@@ -276,6 +276,32 @@ function runCodexAsync(command, args, { input, cwd, timeoutMs, signal }) {
   });
 }
 
+/**
+ * Аргументы запуска `codex exec` для генерации.
+ *
+ * Флаги не угадываются: набор `codex exec` менялся между версиями, и
+ * `--ask-for-approval` в свежих сборках (0.146.0) подкомандой exec уже не
+ * принимается, хотя у верхнеуровневого `codex` остался. Поэтому здесь та же
+ * проверка через capabilities(), что и в buildArgs() из codex-core.mjs.
+ */
+export function buildImageArgs({ cwd, model, refs = [] }) {
+  const caps = capabilities();
+  const args = ["exec"];
+  if (caps.json) args.push("--json");
+  args.push("--skip-git-repo-check");
+  if (bypassSandboxEnabled()) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  } else {
+    args.push("--sandbox", "workspace-write");
+    if (caps.askForApproval) args.push("--ask-for-approval", "never");
+  }
+  args.push("--cd", cwd);
+  if (model) args.push("-m", model);
+  for (const r of refs) args.push("--image", r);
+  args.push("-");
+  return args;
+}
+
 export function generateImage(opts) {
   const {
     prompt,
@@ -318,18 +344,7 @@ export function generateImage(opts) {
   const file = `${slug(name || prompt)}-${crypto.randomBytes(3).toString("hex")}.png`;
   const target = path.join(dir, file);
 
-  const args = ["exec"];
-  if (capabilities().json) args.push("--json");
-  args.push("--skip-git-repo-check");
-  if (bypassSandboxEnabled()) {
-    args.push("--dangerously-bypass-approvals-and-sandbox");
-  } else {
-    args.push("--sandbox", "workspace-write", "--ask-for-approval", "never");
-  }
-  args.push("--cd", cwd);
-  if (model) args.push("-m", model);
-  for (const r of refs) args.push("--image", r);
-  args.push("-");
+  const args = buildImageArgs({ cwd, model, refs });
 
   const startedAt = Date.now();
   const input = buildPrompt({ prompt, aspect_ratio, image_resolution, target, refs });
