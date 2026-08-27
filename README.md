@@ -2,11 +2,40 @@
 
 [Русский](README.ru.md) · **English**
 
-A Claude Code plugin that brings Codex (ChatGPT) into your workflow — so you stop switching between two terminals and copying code from one window to the other.
+**Make Claude Code and Codex work together — and disagree with each other.**
 
-Code review, adversarial review, task delegation, image generation. And the part nothing else does: **the exchange runs both ways**. Claude can consult GPT, and GPT can consult Claude. They can argue, critique each other's decisions, and hand work back and forth.
+![Claude asks Codex to challenge a caching decision, and Codex finds a real bug](assets/demo/demo.gif)
 
-Everything runs on subscriptions you already have. No API keys.
+<sub>A real exchange from this repository, not a mock-up — [the full transcript and the commit it produced](docs/example-debate.md).</sub>
+
+| Claude → Codex | Codex → Claude |
+| --- | --- |
+| Ask a question | Ask a question |
+| Review the current changes | Critique a plan before it's applied |
+| Challenge a decision | Hand a task back to Claude Code |
+| Delegate a task to the background | Use Claude Code's own tools |
+| Generate images | Reach your MCP servers through the proxy |
+
+**No API keys.** It runs on the Claude and ChatGPT subscriptions you already have.
+
+```
+/plugin marketplace add VlDubr/claude-codex-bridge
+/plugin install codex-bridge@claude-codex-bridge
+```
+
+Two more commands and a readiness check: [Installation](#installation).
+
+---
+
+## What it's for
+
+**Catch what Claude missed.** Claude implements, Codex reviews the diff on its own, Claude fixes. A model reviewing its own work brings its own blind spots along.
+
+**Get a second opinion on a decision.** `/codex-bridge:challenge the retry scheme` — GPT argues the other side and names the failure mode nobody accounted for. The exchange in the GIF above is one of those, and GPT was right.
+
+**Delegate the boring half.** Hand the failing test suite to Codex in the background and carry on with the feature. Come back for the diagnosis.
+
+**Let Codex consult Claude.** The reverse bridge: GPT working on a task can ask Claude for an opinion and use Claude Code's own tools. That direction is what nothing else here does.
 
 ---
 
