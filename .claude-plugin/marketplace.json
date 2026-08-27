@@ -1,6 +1,6 @@
 {
   "name": "claude-codex-bridge",
-  "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, делегирование задач, разговор с моделями GPT и генерация изображений на подписке ChatGPT, без API-ключей.",
+  "description": "Bidirectional bridge between Claude Code and Codex (ChatGPT): code review, task delegation, debate, persistent chat, image generation. No API keys — runs on your existing subscriptions.",
   "owner": {
     "name": "VlDubr",
     "url": "https://github.com/VlDubr"
@@ -9,13 +9,21 @@
     {
       "name": "codex-bridge",
       "source": ".",
-      "description": "Двусторонний мост Claude Code ↔ Codex (ChatGPT): ревью, делегирование, генерация изображений",
+      "description": "Claude Code ↔ Codex (ChatGPT): code review, delegation, debate, image generation. No API keys.",
       "category": "development",
       "keywords": [
+        "claude-code",
+        "claude-code-plugin",
         "codex",
+        "openai-codex",
         "chatgpt",
+        "gpt",
+        "mcp",
+        "code-review",
+        "debate",
         "multi-model",
-        "image-generation"
+        "image-generation",
+        "ai-agents"
       ]
     }
   ]
