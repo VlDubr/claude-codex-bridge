@@ -54,10 +54,10 @@ Long-running calls don't sit behind a blind timeout. Codex streams its activity 
 ```
 /codex-bridge:progress
 
-  · размышляет: Разбираю схему ретраев вебхука
-  · запускает: rg -n retry src/
-  · ищет в вебе: idempotency key payment webhook
-  · размышляет: Проверяю гонку при повторной доставке
+  · thinking: Working through the webhook retry scheme
+  · running: rg -n retry src/
+  · searching the web: idempotency key payment webhook
+  · thinking: Checking the race on redelivery
 ```
 
 The same trail streams into Claude Code while the call is in flight: Codex's steps show up next to the tool call as they happen, instead of arriving in one lump at the end.
@@ -235,6 +235,10 @@ Model selection works at three levels: a flag on the command, a plugin setting, 
 ---
 
 ## Security and privacy
+
+**Your code goes to OpenAI.** That is what the bridge is for, so it is worth stating plainly rather than burying. Everything you send through it — the prompt, the diff for a review, and any file Codex decides to read while working — leaves your machine for OpenAI's servers, under your ChatGPT subscription. The reverse direction is no different: what Claude answers back through the reverse bridge, and the results of any MCP tools you proxy, become part of Codex's context and are sent along with it. If your employer forbids sending source code to OpenAI, do not install this.
+
+**Secret files are stripped from review diffs.** `.env`, `.npmrc`, `.netrc`, private keys, keystores and the like are listed as changed by name, but their contents never enter the diff — the real changes around them still do, so the review stays useful.
 
 **The plugin stores no tokens.** OAuth is handled by `codex login`; the plugin runs on top of the existing local Codex CLI session — the same one you get running `codex` directly.
 
