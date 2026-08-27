@@ -1,4 +1,4 @@
-# Claude Codex Bridge — development guide
+# Tandem — development guide
 
 [Русский](README_DEV.ru.md) · **English**
 
@@ -23,7 +23,7 @@ No external dependencies. Both MCP servers and the MCP client implement JSON-RPC
 ## Layout
 
 ```
-claude-codex-bridge/
+tandem/
 ├── .claude-plugin/
 │   ├── plugin.json          manifest, userConfig, defaultEnabled: false
 │   └── marketplace.json     single-plugin catalog, source: "."
@@ -70,9 +70,9 @@ They're easy to confuse, and they do different things:
 
 | What | Value | What it affects |
 |---|---|---|
-| Repository | `claude-codex-bridge` | `/plugin marketplace add VlDubr/claude-codex-bridge` |
-| Marketplace (`marketplace.json` → `name`) | `claude-codex-bridge` | the right-hand side of `codex-bridge@claude-codex-bridge` |
-| Plugin (`plugin.json` → `name`) | `codex-bridge` | **the slash command and subagent prefix**: `/codex-bridge:review`, `@codex-bridge:gpt-advisor` |
+| Repository | `tandem` | `/plugin marketplace add VlDubr/tandem` |
+| Marketplace (`marketplace.json` → `name`) | `tandem` | the right-hand side of `tandem@tandem` |
+| Plugin (`plugin.json` → `name`) | `tandem` | **the slash command and subagent prefix**: `/tandem:review`, `@tandem:gpt-advisor` |
 
 The prefix is never optional: even when a command's name matches the plugin's, the invocation is still `/plugin:command`. So the plugin name stays short — it appears in every single command. Renaming `plugin.json` → `name` changes every command at once and breaks users' muscle memory, so only do it alongside a major version bump.
 
@@ -82,7 +82,7 @@ The prefix is never optional: even when a command's name matches the plugin's, t
 
 ### Language of outward-facing text
 
-The plugin was written in Russian, prompts included. A Russian prompt makes both Codex and Claude answer in Russian, so for a non-Russian user this wasn't "a plugin with Russian docs" — it was a plugin that changed the language of their output. English is now the default; Russian is the `language` setting (`CODEX_BRIDGE_LANG=ru`).
+The plugin was written in Russian, prompts included. A Russian prompt makes both Codex and Claude answer in Russian, so for a non-Russian user this wasn't "a plugin with Russian docs" — it was a plugin that changed the language of their output. English is now the default; Russian is the `language` setting (`TANDEM_LANG=ru`).
 
 Everything the user or the called model sees lives in the `i18n*.mjs` files: `i18n.mjs` (prompts and core texts), `i18n-runtime.mjs` (runtime messages), `i18n-image.mjs`, `i18n-claude.mjs`. `lang()` ignores an unknown value rather than failing — there is nowhere to report it from. Code comments stay Russian: the author reads them, the user doesn't.
 
@@ -212,7 +212,7 @@ The check and the launch must be one operation, so `startJob()` runs under a dir
 The file belongs to the user, so every edit stays inside a marked block. Each of these subtleties was a bug:
 
 - **Replace via a function.** `str.replace(re, block)` interprets `$&`, `$1`, `$'` in the replacement string: a plugin path containing `$&` injected the old block into the result. Only `replace(re, () => block)` is safe.
-- **Escaping the markers.** `# >>> codex-bridge (claude) >>>` contains parentheses — it goes into a `RegExp` only through `esc()`, otherwise the block is never found and a repeated `--link-back` piles up duplicates.
+- **Escaping the markers.** `# >>> tandem (claude) >>>` contains parentheses — it goes into a `RegExp` only through `esc()`, otherwise the block is never found and a repeated `--link-back` piles up duplicates.
 - **Global regex.** Several blocks could accumulate; `unlink()` removes all of them.
 - **TOML string escaping.** A quote in the path broke the file. `tomlString()` escapes `\`, `"`, and control characters.
 - **Conflicts.** If the user already has an unmanaged `[mcp_servers.claude-bridge]`, adding a second table would make the TOML invalid — the operation is refused and the file left untouched.
@@ -305,16 +305,16 @@ During active development you can drop the field — the commit SHA then becomes
 
 ### Multiple plugins in one repository
 
-If other plugins appear, move this one to `plugins/codex-bridge/` and change `source` to `"./plugins/codex-bridge"`. Entry paths resolve relative to the directory containing `.claude-plugin/`.
+If other plugins appear, move this one to `plugins/tandem/` and change `source` to `"./plugins/tandem"`. Entry paths resolve relative to the directory containing `.claude-plugin/`.
 
 ---
 
 ## Debugging
 
 ```bash
-claude --plugin-dir /path/to/claude-codex-bridge   # run without installing
+claude --plugin-dir /path/to/tandem   # run without installing
 claude --debug                              # plugin loading, MCP init
-/codex-bridge:setup                                # environment diagnostics
+/tandem:setup                                # environment diagnostics
 ```
 
 You can talk to an MCP server directly:
@@ -326,11 +326,11 @@ printf '%s\n' \
   | node scripts/mcp-codex.mjs
 ```
 
-The reverse bridge works the same way via `node bridge/mcp-claude.mjs`; it reads its allowlist from `CODEX_BRIDGE_EXPOSED` (default `~/.codex/codex-bridge/exposed.json`).
+The reverse bridge works the same way via `node bridge/mcp-claude.mjs`; it reads its allowlist from `TANDEM_EXPOSED` (default `~/.codex/tandem/exposed.json`).
 
-Useful environment variables for tests and debugging: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `CODEX_BRIDGE_CONFIG`, `CODEX_BRIDGE_EXPOSED`, `CODEX_HOME`.
+Useful environment variables for tests and debugging: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `TANDEM_CONFIG`, `TANDEM_EXPOSED`, `CODEX_HOME`.
 
-Every plugin setting also arrives as an environment variable, which is how the tests drive them: `CODEX_BRIDGE_LANG`, `CODEX_BRIDGE_MODEL`, `CODEX_BRIDGE_EFFORT`, `CODEX_BRIDGE_REASONING_SUMMARY`, `CODEX_BRIDGE_REVIEW_BACKEND`, `CODEX_BRIDGE_PROGRESS`, `CODEX_BRIDGE_MAX_PARALLEL_JOBS`, `CODEX_BRIDGE_JOB_TIMEOUT_MIN`, `CODEX_BRIDGE_IMAGE_DIR`, `CODEX_BRIDGE_IMAGE_TIMEOUT_MIN`, `CODEX_BRIDGE_BYPASS_SANDBOX`.
+Every plugin setting also arrives as an environment variable, which is how the tests drive them: `TANDEM_LANG`, `TANDEM_MODEL`, `TANDEM_EFFORT`, `TANDEM_REASONING_SUMMARY`, `TANDEM_REVIEW_BACKEND`, `TANDEM_PROGRESS`, `TANDEM_MAX_PARALLEL_JOBS`, `TANDEM_JOB_TIMEOUT_MIN`, `TANDEM_IMAGE_DIR`, `TANDEM_IMAGE_TIMEOUT_MIN`, `TANDEM_BYPASS_SANDBOX`.
 
 ---
 
@@ -345,7 +345,7 @@ An honest list of what has never been checked against live binaries:
 
 The `codex app-server` protocol is no longer on this list: the method names, the optional `jsonrpc` field, the item shape, and the `thread/tokenUsage/updated` counters were all checked against a live binary.
 
-A first run in a real environment should proceed in order of increasing risk: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
+A first run in a real environment should proceed in order of increasing risk: `/tandem:setup` → `/tandem:models` → `/tandem:review` → `/tandem:delegate` → `/tandem:image`.
 
 ## Contributing
 

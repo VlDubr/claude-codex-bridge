@@ -4,7 +4,7 @@
 
 This is not a scripted demo. It is an exchange that happened in this repository
 on 2026-08-27, while fixing a test that had been failing on CI since the day it
-was written. It ends in commit [`cc2f8a1`](https://github.com/VlDubr/claude-codex-bridge/commit/cc2f8a1).
+was written. It ends in commit [`cc2f8a1`](https://github.com/VlDubr/tandem/commit/cc2f8a1).
 
 The conversation was held in Russian and is translated here; the original is in
 [the Russian version](example-debate.ru.md). The command output is verbatim.

@@ -1,7 +1,7 @@
 ---
 description: Show the models actually available in this Codex installation
 argument-hint: "[--refresh]"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_models
+allowed-tools: mcp__plugin_tandem_codex__codex_models
 ---
 
 Call **codex_models**, passing `refresh: true` if `$ARGUMENTS` contains `--refresh`.

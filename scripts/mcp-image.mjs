@@ -105,4 +105,4 @@ async function handle(name, args, ctx = {}) {
   return text(message("success", rel, Math.round(r.bytes / 1024), r.moved));
 }
 
-serve({ name: "codex-bridge-image", version: pluginVersion(), tools: TOOLS, handle });
+serve({ name: "tandem-image", version: pluginVersion(), tools: TOOLS, handle });

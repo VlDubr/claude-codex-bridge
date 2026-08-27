@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // MCP stdio-сервер для направления GPT → Claude. Регистрируется в
-// ~/.codex/config.toml командой /codex-bridge:setup --link-back.
+// ~/.codex/config.toml командой /tandem:setup --link-back.
 //
 // Даёт Codex три класса инструментов:
 //   1. claude_ask / claude_critique — Claude как консультант (только чтение)
 //   2. claude_task                  — делегирование Claude задачи с его инструментами
 //   3. <server>__<tool>             — инструменты MCP-серверов Claude напрямую
 //
-// Пункты 2 и 3 выключены по умолчанию и включаются через /codex-bridge:setup.
+// Пункты 2 и 3 выключены по умолчанию и включаются через /tandem:setup.
 
 import { spawn } from "node:child_process";
 import { serve, text, fail } from "../scripts/mcp-lib.mjs";

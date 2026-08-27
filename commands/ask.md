@@ -1,7 +1,7 @@
 ---
 description: Ask GPT for a second opinion right now
 argument-hint: "<question>"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_ask
+allowed-tools: mcp__plugin_tandem_codex__codex_ask
 ---
 
 The user wants GPT's opinion on this question: `$ARGUMENTS`

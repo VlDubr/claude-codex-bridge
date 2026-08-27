@@ -94,7 +94,7 @@ export class AppServerClient {
     this.readline.on("line", (line) => this.handleLine(line));
 
     await this.request("initialize", {
-      clientInfo: { name: "claude-codex-bridge", version: pluginVersion() },
+      clientInfo: { name: "tandem", version: pluginVersion() },
       capabilities: { experimentalApi: true },
     });
     this.notify("initialized", {});

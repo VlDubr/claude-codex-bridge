@@ -55,7 +55,7 @@ export function dataDir() {
   const base =
     fromEnv && path.isAbsolute(fromEnv)
       ? fromEnv
-      : path.join(os.homedir(), ".claude", "plugins", "data", "codex-bridge");
+      : path.join(os.homedir(), ".claude", "plugins", "data", "tandem");
   const dir = path.join(base, "jobs");
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   try {
@@ -296,13 +296,13 @@ export function capabilities({ force = false } = {}) {
 // ------------------------------------------------------------- сборка команды
 
 export function bypassSandboxEnabled() {
-  const v = envClean("CODEX_BRIDGE_BYPASS_SANDBOX");
+  const v = envClean("TANDEM_BYPASS_SANDBOX");
   return v === "true" || v === "1" || v === "yes";
 }
 
 /** Нативный backend включается только точным явным значением. */
 export function reviewBackend() {
-  return envClean("CODEX_BRIDGE_REVIEW_BACKEND") === "app-server" ? "app-server" : "exec";
+  return envClean("TANDEM_REVIEW_BACKEND") === "app-server" ? "app-server" : "exec";
 }
 
 const SANDBOX_BY_MODE = {
@@ -331,11 +331,11 @@ export function buildArgs({ mode, model, effort, cwd, sandbox, images = [], resu
   if (bypassSandboxEnabled() && caps.bypassSandbox) {
     args.push("--dangerously-bypass-approvals-and-sandbox");
     if (cwd && caps.cd && !resuming) args.push("--cd", cwd);
-    const mb = model || envClean("CODEX_BRIDGE_MODEL");
+    const mb = model || envClean("TANDEM_MODEL");
     if (mb) args.push("-m", mb);
-    const eb = effort || envClean("CODEX_BRIDGE_EFFORT");
+    const eb = effort || envClean("TANDEM_EFFORT");
     if (eb) args.push("-c", `model_reasoning_effort="${eb}"`);
-    const sb = reasoningSummary || envClean("CODEX_BRIDGE_REASONING_SUMMARY");
+    const sb = reasoningSummary || envClean("TANDEM_REASONING_SUMMARY");
     if (sb) args.push("-c", `model_reasoning_summary="${sb}"`);
     if (caps.image) for (const img of images) args.push("--image", img);
     if (resuming) args.push(resume);
@@ -356,13 +356,13 @@ export function buildArgs({ mode, model, effort, cwd, sandbox, images = [], resu
     if (cwd && caps.cd) args.push("--cd", cwd);
   }
 
-  const m = model || envClean("CODEX_BRIDGE_MODEL");
+  const m = model || envClean("TANDEM_MODEL");
   if (m) args.push("-m", m);
-  const e = effort || envClean("CODEX_BRIDGE_EFFORT");
+  const e = effort || envClean("TANDEM_EFFORT");
   if (e) args.push("-c", `model_reasoning_effort="${e}"`);
   // Сводки размышлений: при auto Codex может не прислать ни одной, и лента
   // остаётся без самой содержательной части.
-  const rs = reasoningSummary || envClean("CODEX_BRIDGE_REASONING_SUMMARY");
+  const rs = reasoningSummary || envClean("TANDEM_REASONING_SUMMARY");
   if (rs) args.push("-c", `model_reasoning_summary="${rs}"`);
   if (caps.image) for (const img of images) args.push("--image", img);
 
@@ -744,7 +744,7 @@ const JOB_TIMEOUT_MAX_MIN = 480;
  * реконсиляции, а Infinity непригоден для setTimeout.
  */
 export function jobTimeoutMs() {
-  const n = Number(envClean("CODEX_BRIDGE_JOB_TIMEOUT_MIN"));
+  const n = Number(envClean("TANDEM_JOB_TIMEOUT_MIN"));
   const min = Number.isFinite(n) && n >= 1 ? Math.min(n, JOB_TIMEOUT_MAX_MIN) : JOB_TIMEOUT_DEFAULT_MIN;
   return min * 60_000;
 }
@@ -770,7 +770,7 @@ const START_LOCK_RETRY_MS = 25;
 
 /** Предел живых задач. Ноль — без предела. */
 export function maxParallelJobs() {
-  const raw = envClean("CODEX_BRIDGE_MAX_PARALLEL_JOBS");
+  const raw = envClean("TANDEM_MAX_PARALLEL_JOBS");
   if (raw === undefined) return 4;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return 4;
@@ -923,9 +923,9 @@ function startJobUnlocked(opts) {
       allowFallback,
       reviewTarget: opts.reviewTarget || null,
       appServerCommand: opts.appServerCommand || null,
-      model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
-      effort: opts.effort || envClean("CODEX_BRIDGE_EFFORT") || null,
-      reasoningSummary: opts.reasoningSummary || envClean("CODEX_BRIDGE_REASONING_SUMMARY") || null,
+      model: opts.model || envClean("TANDEM_MODEL") || null,
+      effort: opts.effort || envClean("TANDEM_EFFORT") || null,
+      reasoningSummary: opts.reasoningSummary || envClean("TANDEM_REASONING_SUMMARY") || null,
       timeoutMs: Number(opts.jobTimeoutMs) || jobTimeoutMs(),
     })
   );
@@ -938,8 +938,8 @@ function startJobUnlocked(opts) {
     pid: null,
     mode: opts.mode,
     backend,
-    model: opts.model || envClean("CODEX_BRIDGE_MODEL") || null,
-    effort: opts.effort || envClean("CODEX_BRIDGE_EFFORT") || null,
+    model: opts.model || envClean("TANDEM_MODEL") || null,
+    effort: opts.effort || envClean("TANDEM_EFFORT") || null,
     label: String(opts.task || opts.focus || opts.question || opts.message || opts.mode || "").slice(0, 120),
     chat: opts.chat || null,
     resumedFrom: opts.resume || null,

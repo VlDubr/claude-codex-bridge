@@ -1,7 +1,7 @@
 ---
 description: Hold a Claude ↔ GPT debate about a disputed decision
 argument-hint: "[--rounds N] <debate topic>"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_ask
+allowed-tools: mcp__plugin_tandem_codex__codex_ask
 ---
 
 The user wants two models to analyze this topic: `$ARGUMENTS`

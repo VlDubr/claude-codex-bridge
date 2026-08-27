@@ -1,7 +1,7 @@
 ---
 description: Review the current changes using GPT (Codex)
 argument-hint: "[--base <branch>] [--now] [additional focus]"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_review
+allowed-tools: mcp__plugin_tandem_codex__codex_review
 ---
 
 The user is requesting a code review from GPT. Arguments: `$ARGUMENTS`

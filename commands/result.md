@@ -1,7 +1,7 @@
 ---
 description: Show the result of a completed Codex job
 argument-hint: "[job-id]"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_result, Bash(git status)
+allowed-tools: mcp__plugin_tandem_codex__codex_result, Bash(git status)
 ---
 
 Call **codex_result** with the `job_id` from `$ARGUMENTS` (if empty, the latest job will be used).
