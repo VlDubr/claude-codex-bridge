@@ -3,19 +3,25 @@
   "name": "codex-bridge",
   "displayName": "Codex Bridge",
   "version": "0.7.2",
-  "description": "Двусторонний мост между Claude Code и Codex (ChatGPT): ревью, состязательное ревью, делегирование задач, фоновые джобы, взаимные консультации моделей и генерация изображений встроенным инструментом Codex. Всё на подписке ChatGPT, без API-ключей.",
+  "description": "Bidirectional bridge between Claude Code and Codex (ChatGPT): code review, adversarial review, task delegation, background jobs, models consulting each other, and image generation via Codex's built-in tool. Runs on your existing ChatGPT subscription, no API keys.",
   "author": {
     "name": "VlDubr",
     "url": "https://github.com/VlDubr"
   },
   "license": "MIT",
   "keywords": [
+    "claude-code",
+    "claude-code-plugin",
     "codex",
+    "openai-codex",
     "chatgpt",
     "gpt",
-    "review",
+    "mcp",
+    "code-review",
+    "debate",
     "multi-model",
     "delegation",
+    "ai-agents",
     "image-generation",
     "gpt-image-2"
   ],
@@ -30,71 +36,71 @@
     },
     "language": {
       "type": "string",
-      "title": "Язык описаний, сообщений и промптов",
-      "description": "en — английский (по умолчанию), ru — русский. Промпты уходят вызываемой модели на выбранном языке, поэтому от него зависит и язык её ответов. Команды и агенты всегда на английском.",
+      "title": "Language of descriptions, messages and prompts",
+      "description": "en — English (default), ru — Russian. Prompts are sent to the invoked model in the selected language, so its answers follow it as well. Commands and agents are always in English.",
       "default": "en",
       "required": false
     },
     "default_model": {
       "type": "string",
-      "title": "Модель Codex по умолчанию",
-      "description": "Например gpt-5.6-sol, gpt-5.4-mini, gpt-5.3-codex-spark. Пусто — дефолт самого Codex.",
+      "title": "Default Codex model",
+      "description": "For example gpt-5.6-sol, gpt-5.4-mini, gpt-5.3-codex-spark. Empty means Codex's own default.",
       "required": false
     },
     "default_effort": {
       "type": "string",
-      "title": "Reasoning effort по умолчанию",
-      "description": "Уровень reasoning. Набор зависит от модели — точный список показывает /codex-bridge:models. Значение minimal принимают только модели прошлых поколений; gpt-5.6 и новее его отвергают.",
+      "title": "Default reasoning effort",
+      "description": "Reasoning level. The available set depends on the model — /codex-bridge:models shows the exact list. Only earlier-generation models accept minimal; gpt-5.6 and newer reject it.",
       "required": false
     },
     "reasoning_summary": {
       "type": "string",
-      "title": "Сводки размышлений",
-      "description": "auto — как решит Codex (сводок может не быть вовсе), detailed — подробные сводки в ленте хода работы. Полные рассуждения модели недоступны ни при каком значении.",
+      "title": "Reasoning summaries",
+      "description": "auto — Codex decides (there may be no summaries at all), detailed — verbose summaries in the progress trail. The model's full reasoning is unavailable at any value.",
       "required": false
     },
     "progress_notifications": {
       "type": "boolean",
-      "title": "Показывать ход работы во время вызова",
-      "description": "Лента действий Codex отправляется клиенту как notifications/progress. Выключите, если ваша сборка Claude Code задета дефектом anthropics/claude-code#47378: там получение таких уведомлений закрывает соединение с MCP-сервером и следующий вызов падает с \"Connection closed\".",
+      "title": "Show progress during a call",
+      "description": "Codex's action trail is sent to the client as notifications/progress. Turn this off if your Claude Code build is affected by anthropics/claude-code#47378: there, receiving such notifications closes the MCP server connection and the next call fails with \"Connection closed\".",
       "default": true,
       "required": false
     },
     "max_parallel_jobs": {
       "type": "number",
-      "title": "Предел одновременных задач Codex",
-      "description": "Сколько задач может выполняться сразу. Каждая — отдельный процесс Codex, расходующий квоту ChatGPT и память. Ноль снимает предел.",
+      "title": "Limit of concurrent Codex jobs",
+      "description": "How many jobs may run at once. Each one is a separate Codex process consuming ChatGPT quota and memory. Zero removes the limit.",
       "default": 4,
       "min": 0,
       "max": 32
     },
     "job_timeout_minutes": {
       "type": "number",
-      "title": "Таймаут фоновой задачи (мин)",
-      "description": "После этого времени джоба помечается как timeout и процесс убивается.",
+      "title": "Background job timeout (min)",
+      "description": "After this time the job is marked as timeout and the process is killed.",
       "default": 30,
       "min": 1,
       "max": 480
     },
     "image_output_dir": {
       "type": "string",
-      "title": "Каталог для изображений",
-      "description": "Куда складывать сгенерированное, относительно корня проекта.",
+      "title": "Directory for images",
+      "description": "Where to put generated files, relative to the project root.",
       "default": "assets/generated",
       "required": false
     },
     "image_timeout_minutes": {
       "type": "number",
-      "title": "Таймаут генерации изображения (мин)",
-      "description": "Встроенный инструмент Codex обычно отвечает за 4–6 минут, при 4K дольше.",
+      "title": "Image generation timeout (min)",
+      "description": "Codex's built-in tool usually answers within 4–6 minutes, longer at 4K.",
       "default": 15,
       "min": 2,
       "max": 60
     },
     "bypass_sandbox": {
       "type": "boolean",
-      "title": "Обходить песочницу Codex (аварийный режим)",
-      "description": "Включайте только если песочница Codex сломана рассинхроном версий и /codex-bridge:setup это подтверждает. Codex будет выполнять команды без изоляции. Правильное решение — переустановить Codex.",
+      "title": "Bypass the Codex sandbox (emergency mode)",
+      "description": "Enable only if the Codex sandbox is broken by a version mismatch and /codex-bridge:setup confirms it. Codex will then run commands without isolation. The proper fix is to reinstall Codex.",
       "default": false,
       "required": false
     }
