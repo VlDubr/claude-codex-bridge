@@ -1,5 +1,5 @@
 {
-  "name": "claude-codex-bridge",
+  "name": "tandem",
   "description": "Bidirectional bridge between Claude Code and Codex (ChatGPT): code review, task delegation, debate, persistent chat, image generation. No API keys — runs on your existing subscriptions.",
   "owner": {
     "name": "VlDubr",
@@ -7,7 +7,7 @@
   },
   "plugins": [
     {
-      "name": "codex-bridge",
+      "name": "tandem",
       "source": ".",
       "description": "Claude Code ↔ Codex (ChatGPT): code review, delegation, debate, image generation. No API keys.",
       "category": "development",

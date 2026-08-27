@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 const ROOT = path.resolve(import.meta.dirname, "..");
 // На Windows абсолютный путь не является валидным URL для ESM-загрузчика.
 const ROOT_URL = pathToFileURL(ROOT).href;
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-test-"));
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-test-"));
 const results = [];
 
 function t(name, fn) {
@@ -281,7 +281,7 @@ await tExec("2c. дескрипторы не текут при массовом 
   const d = fresh("jobs-fd");
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
-  process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS = "0"; // тест про дескрипторы, предел здесь мешает
+  process.env.TANDEM_MAX_PARALLEL_JOBS = "0"; // тест про дескрипторы, предел здесь мешает
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?fd=${Date.now()}`);
 
   const count = () => {
@@ -297,7 +297,7 @@ await tExec("2c. дескрипторы не текут при массовом 
   await sleep(200);
   const leaked = count() - before;
   assert.ok(leaked < 10, `утечка ${leaked} дескрипторов на 40 задач`);
-  delete process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS;
+  delete process.env.TANDEM_MAX_PARALLEL_JOBS;
 });
 
 // ───────────────────────────────── 3. Path traversal через job_id
@@ -346,7 +346,7 @@ console.log("ok");`,
         params: { name: "claude_task", arguments: { task: "x", allowed_tools: ["Edit", "Bash"], write: true } },
       },
     ],
-    { CLAUDE_BIN: path.join(d, "claude"), CODEX_BRIDGE_EXPOSED: exposed }
+    { CLAUDE_BIN: path.join(d, "claude"), TANDEM_EXPOSED: exposed }
   );
   assert.ok(res.length >= 2, "мост не ответил");
   const call = res.find((m) => m.id === 2);
@@ -381,7 +381,7 @@ console.log("ok");`,
         params: { name: "claude_task", arguments: { task: "x", write: false } },
       },
     ],
-    { CLAUDE_BIN: path.join(d, "claude"), CODEX_BRIDGE_EXPOSED: exposed }
+    { CLAUDE_BIN: path.join(d, "claude"), TANDEM_EXPOSED: exposed }
   );
   const argv = JSON.parse(fs.readFileSync(argvFile, "utf8"));
   assert.ok(argv.includes("--tools"), `использован не --tools: ${argv.join(" ")}`);
@@ -399,7 +399,7 @@ await tExec("5a. текстовый файл не принимается за и
   const d = fresh("img-fake");
   // Тексты проверяются по-русски, значит язык задаётся явно: по умолчанию он
   // английский, и без этого тест проверял бы не поведение, а язык среды.
-  process.env.CODEX_BRIDGE_LANG = "ru";
+  process.env.TANDEM_LANG = "ru";
   const stray = path.join(d, "gen");
   fs.mkdirSync(stray, { recursive: true });
   process.env.CODEX_BIN = fakeCodex(d);
@@ -411,7 +411,7 @@ await tExec("5a. текстовый файл не принимается за и
   assert.equal(r.ok, false, "текстовый файл принят как изображение");
   assert.match(r.error, /не является изображением|вне проекта/);
   delete process.env.FAKE;
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
 });
 
 await t("5b. out_dir с .. и абсолютный путь отвергаются", async () => {
@@ -438,7 +438,7 @@ await t("5c. SAVED вне проекта и вне каталога Codex отв
 
 await tExec("5d. ненулевой код Codex не считается успехом", async () => {
   const d = fresh("img-exit");
-  process.env.CODEX_BRIDGE_LANG = "ru";
+  process.env.TANDEM_LANG = "ru";
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.FAKE = "exit7";
   const img = await import(`${ROOT_URL}/scripts/image-core.mjs?x=${Date.now()}`);
@@ -446,7 +446,7 @@ await tExec("5d. ненулевой код Codex не считается усп�
   assert.equal(r.ok, false);
   assert.match(r.error, /кодом 7/);
   delete process.env.FAKE;
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
 });
 
 // ───────────────────────────────── 6. Безопасность config.toml
@@ -454,25 +454,25 @@ await tExec("5d. ненулевой код Codex не считается усп�
 await t("6a. $& в пути не портит блок", async () => {
   const d = fresh("toml-amp");
   const cfg = path.join(d, "config.toml");
-  process.env.CODEX_BRIDGE_CONFIG = cfg;
+  process.env.TANDEM_CONFIG = cfg;
   const root = path.join(d, "plug$&in");
   fs.mkdirSync(path.join(root, "bridge"), { recursive: true });
   fs.writeFileSync(path.join(root, "bridge", "mcp-claude.mjs"), "");
   const lb = await import(`${ROOT_URL}/scripts/link-back.mjs?a=${Date.now()}`);
   lb.link(root);
   assert.equal(lb.linkedPath(), path.join(root, "bridge", "mcp-claude.mjs"));
-  assert.ok(!fs.readFileSync(cfg, "utf8").includes(">>> codex-bridge (claude) >>>\n# Управляется".repeat(2)));
+  assert.ok(!fs.readFileSync(cfg, "utf8").includes(">>> tandem (claude) >>>\n# Управляется".repeat(2)));
 });
 
 await tExec("6b. кавычка в пути даёт валидную TOML-строку", async () => {
   const d = fresh("toml-quote");
-  process.env.CODEX_BRIDGE_CONFIG = path.join(d, "config.toml");
+  process.env.TANDEM_CONFIG = path.join(d, "config.toml");
   const root = path.join(d, 'pl"ug');
   fs.mkdirSync(path.join(root, "bridge"), { recursive: true });
   fs.writeFileSync(path.join(root, "bridge", "mcp-claude.mjs"), "");
   const lb = await import(`${ROOT_URL}/scripts/link-back.mjs?q=${Date.now()}`);
   lb.link(root);
-  const txt = fs.readFileSync(process.env.CODEX_BRIDGE_CONFIG, "utf8");
+  const txt = fs.readFileSync(process.env.TANDEM_CONFIG, "utf8");
   assert.match(txt, /args = \["[^"]*\\"[^"]*"\]/, "кавычка не экранирована");
   assert.equal(lb.linkedPath(), path.join(root, "bridge", "mcp-claude.mjs"));
 });
@@ -480,21 +480,21 @@ await tExec("6b. кавычка в пути даёт валидную TOML-ст�
 await t("6c. unlink удаляет все управляемые блоки", async () => {
   const d = fresh("toml-dup");
   const cfg = path.join(d, "config.toml");
-  process.env.CODEX_BRIDGE_CONFIG = cfg;
+  process.env.TANDEM_CONFIG = cfg;
   const blk = (p) =>
-    `# >>> codex-bridge (claude) >>>\n[mcp_servers.claude-bridge]\ncommand = "node"\nargs = ["${p}"]\n# <<< codex-bridge (claude) <<<\n`;
+    `# >>> tandem (claude) >>>\n[mcp_servers.claude-bridge]\ncommand = "node"\nargs = ["${p}"]\n# <<< tandem (claude) <<<\n`;
   fs.writeFileSync(cfg, `model = "x"\n\n${blk("/old/1")}\n${blk("/old/2")}\n`);
   const lb = await import(`${ROOT_URL}/scripts/link-back.mjs?d=${Date.now()}`);
   lb.unlink();
   const txt = fs.readFileSync(cfg, "utf8");
-  assert.ok(!txt.includes("codex-bridge"), "остались блоки");
+  assert.ok(!txt.includes("tandem"), "остались блоки");
   assert.match(txt, /model = "x"/, "пользовательские настройки потеряны");
 });
 
 await t("6d. конфликт с чужой таблицей обнаруживается, файл не портится", async () => {
   const d = fresh("toml-conflict");
   const cfg = path.join(d, "config.toml");
-  process.env.CODEX_BRIDGE_CONFIG = cfg;
+  process.env.TANDEM_CONFIG = cfg;
   const original = '[mcp_servers.claude-bridge]\ncommand = "my-own"\n';
   fs.writeFileSync(cfg, original);
   const root = path.join(d, "plug");
@@ -559,7 +559,7 @@ await t("7d. журнал прежнего формата читается по-
 await tExec("8. exposed.json создаётся с 0600 и без литеральных секретов", async () => {
   const d = fresh("perm");
   const exposed = path.join(d, "cfg", "exposed.json");
-  process.env.CODEX_BRIDGE_EXPOSED = exposed;
+  process.env.TANDEM_EXPOSED = exposed;
   const tp = await import(`${ROOT_URL}/bridge/tool-proxy.mjs?perm=${Date.now()}`);
 
   const { env, dropped } = tp.sanitizeEnv({ TOKEN: "sk-literal-secret", REF: "${MY_VAR}" });
@@ -717,15 +717,15 @@ await t("14c. нераскрытый ${user_config.*} не уходит в ар�
   const d = fresh("usercfg");
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
-  process.env.CODEX_BRIDGE_MODEL = "${user_config.default_model}";
-  process.env.CODEX_BRIDGE_EFFORT = "${user_config.default_effort}";
+  process.env.TANDEM_MODEL = "${user_config.default_model}";
+  process.env.TANDEM_EFFORT = "${user_config.default_effort}";
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?uc=${Date.now()}`);
   const args = core.buildArgs({ mode: "ask", cwd: d });
 
   assert.ok(!args.some((a) => String(a).includes("${")), `плейсхолдер в аргументах: ${args.join(" ")}`);
   assert.ok(!args.includes("-m"), "пустая модель передана в -m");
-  delete process.env.CODEX_BRIDGE_MODEL;
-  delete process.env.CODEX_BRIDGE_EFFORT;
+  delete process.env.TANDEM_MODEL;
+  delete process.env.TANDEM_EFFORT;
 });
 
 await t("14d. .mcp.json не переопределяет автоэкспортируемые CLAUDE_*", async () => {
@@ -767,23 +767,23 @@ await tExec("15b. bypass_sandbox выключен по умолчанию и в�
   process.env.FAKE_HELP =
     "Usage: codex exec\n  --sandbox <mode>\n  --cd <dir>\n  --dangerously-bypass-approvals-and-sandbox";
 
-  delete process.env.CODEX_BRIDGE_BYPASS_SANDBOX;
+  delete process.env.TANDEM_BYPASS_SANDBOX;
   let core = await import(`${ROOT_URL}/scripts/codex-core.mjs?b1=${Date.now()}`);
   let args = core.buildArgs({ mode: "ask", cwd: d });
   assert.ok(!args.includes("--dangerously-bypass-approvals-and-sandbox"), "обход включён без настройки");
   assert.ok(args.includes("--sandbox"), "песочница не запрошена");
 
   // Нераскрытый плейсхолдер настройки не должен включать аварийный режим
-  process.env.CODEX_BRIDGE_BYPASS_SANDBOX = "${user_config.bypass_sandbox}";
+  process.env.TANDEM_BYPASS_SANDBOX = "${user_config.bypass_sandbox}";
   core = await import(`${ROOT_URL}/scripts/codex-core.mjs?b2=${Date.now()}`);
   assert.equal(core.bypassSandboxEnabled(), false, "плейсхолдер включил обход");
 
-  process.env.CODEX_BRIDGE_BYPASS_SANDBOX = "true";
+  process.env.TANDEM_BYPASS_SANDBOX = "true";
   core = await import(`${ROOT_URL}/scripts/codex-core.mjs?b3=${Date.now()}`);
   args = core.buildArgs({ mode: "delegate", cwd: d });
   assert.ok(args.includes("--dangerously-bypass-approvals-and-sandbox"), "обход не применился");
   assert.ok(!args.includes("--sandbox"), "конфликтующие флаги переданы вместе");
-  delete process.env.CODEX_BRIDGE_BYPASS_SANDBOX;
+  delete process.env.TANDEM_BYPASS_SANDBOX;
   delete process.env.FAKE_HELP;
 });
 
@@ -845,9 +845,9 @@ await t("16a. поток событий превращается в ленту �
   assert.ok(trail.some((l) => /reconnecting/.test(l)), "реконнект потерян");
 
   // Та же лента по-русски: подписи переключаются вместе с языком.
-  process.env.CODEX_BRIDGE_LANG = "ru";
+  process.env.TANDEM_LANG = "ru";
   const ruTrail = ev.progressTrail(JSONL);
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
   assert.ok(ruTrail.some((l) => /размышляет: Scanning docs/.test(l)), `лента не переключилась: ${ruTrail}`);
 });
 
@@ -867,7 +867,7 @@ await t("16c. не-JSON вывод не теряется (старый Codex б�
 
 await tExec("16d. таймаут показывает, что модель успела сделать", async () => {
   const d = fresh("timeout-trail");
-  process.env.CODEX_BRIDGE_LANG = "ru";
+  process.env.TANDEM_LANG = "ru";
   const bin = path.join(d, "codex");
   fs.writeFileSync(
     bin,
@@ -894,7 +894,7 @@ if(a[0]==="exec"){
   const trail = r.trail.join("\n");
   assert.match(trail, /размышляет|запускает/, `в ленте нет действий: ${trail}`);
   core.cancelJob(r.job.id);
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
 });
 
 await tExec("16e. --json добавляется в аргументы, когда поддержан", async () => {
@@ -916,7 +916,7 @@ await tExec("16e. --json добавляется в аргументы, когд�
 
 await t("10. setup отвергает флаг вместо значения и взаимоисключающие пары", async () => {
   const d = fresh("args");
-  const env = { ...process.env, CODEX_BRIDGE_EXPOSED: path.join(d, "e.json"), CODEX_BIN: fakeCodex(d) };
+  const env = { ...process.env, TANDEM_EXPOSED: path.join(d, "e.json"), CODEX_BIN: fakeCodex(d) };
   const run = (a) => spawnSync("node", [`${ROOT}/scripts/setup.mjs`, ...a], { encoding: "utf8", env, cwd: d });
 
   const r1 = run(["--expose", "tracker", "--tools", "--link-back"]);
@@ -1092,13 +1092,13 @@ await t("17c. сводки размышлений включаются наст�
   const d = fresh("summary");
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
-  process.env.CODEX_BRIDGE_REASONING_SUMMARY = "detailed";
+  process.env.TANDEM_REASONING_SUMMARY = "detailed";
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?rs=${Date.now()}`);
   assert.ok(
     core.buildArgs({ mode: "ask", cwd: d }).includes(`model_reasoning_summary="detailed"`),
     "настройка сводок не дошла до Codex"
   );
-  delete process.env.CODEX_BRIDGE_REASONING_SUMMARY;
+  delete process.env.TANDEM_REASONING_SUMMARY;
 });
 
 // ───────────────────────────────── 18. Воркер задачи вместо /bin/sh
@@ -1300,7 +1300,7 @@ await t("20c. лента прогресса выключается настро�
       { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
       { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "work", arguments: {}, _meta: { progressToken: "tok" } } },
     ],
-    { CODEX_BRIDGE_PROGRESS: "false" }
+    { TANDEM_PROGRESS: "false" }
   );
   assert.equal(out.filter((m) => m.method === "notifications/progress").length, 0, "уведомления идут при выключенной ленте");
   assert.ok(out.some((m) => m.id === 2 && m.result), "сам вызов перестал отвечать");
@@ -1469,7 +1469,7 @@ await tExec("23a. вызовы обратного моста идут парал
       { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "claude_ask", arguments: { question: "a" } } },
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "claude_ask", arguments: { question: "b" } } },
     ],
-    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1500 }), CODEX_BRIDGE_EXPOSED: exposed }
+    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1500 }), TANDEM_EXPOSED: exposed }
   );
   const elapsed = Date.now() - started;
 
@@ -1491,7 +1491,7 @@ await tExec("23b. ping доходит, пока обратный мост зан
       { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "claude_ask", arguments: { question: "a" } } },
       { jsonrpc: "2.0", id: 3, method: "ping" },
     ],
-    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1200 }), CODEX_BRIDGE_EXPOSED: exposed }
+    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1200 }), TANDEM_EXPOSED: exposed }
   );
 
   const ping = res.findIndex((m) => m.id === 3);
@@ -1514,7 +1514,7 @@ await tExec("23c. отмена одного вызова не трогает д�
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "claude_ask", arguments: { question: "b" } } },
       { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2 } },
     ],
-    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1500, marker }), CODEX_BRIDGE_EXPOSED: exposed }
+    { CLAUDE_BIN: fakeClaude(d, { sleepMs: 1500, marker }), TANDEM_EXPOSED: exposed }
   );
 
   assert.ok(!res.some((m) => m.id === 2), "на отменённый вызов пришёл ответ");
@@ -1682,7 +1682,7 @@ await t("25g. чужой diff.external не подменяет формат ди
 });
 
 await tExec("25h. символическая ссылка не разыменовывается", async () => {
-  process.env.CODEX_BRIDGE_LANG = "ru";
+  process.env.TANDEM_LANG = "ru";
   const { dir } = repo("diff-symlink");
   const outside = path.join(TMP, "чужой-секрет.txt");
   fs.writeFileSync(outside, "СОДЕРЖИМОЕ ЗА ПРЕДЕЛАМИ РЕПОЗИТОРИЯ");
@@ -1692,7 +1692,7 @@ await tExec("25h. символическая ссылка не разымено�
   const out = core.collectDiff(dir, null);
   assert.ok(!out.includes("СОДЕРЖИМОЕ ЗА ПРЕДЕЛАМИ"), "по симлинку прочитан файл вне репозитория");
   assert.match(out, /символическая ссылка/, "симлинк не помечен");
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
 });
 
 // ───────────────────────────────── 26. Предел одновременных задач
@@ -1733,7 +1733,7 @@ await t("26a. предел одновременных задач не проби
   const data = path.join(d, "data");
   process.env.CLAUDE_PLUGIN_DATA = data;
   process.env.CODEX_BIN = path.join(d, "codex-которого-нет");
-  process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS = "1";
+  process.env.TANDEM_MAX_PARALLEL_JOBS = "1";
   const v1 = victim();
   fakeLiveJob(data, "job-aaaaaaaa", { pid: v1.pid });
 
@@ -1753,7 +1753,7 @@ await t("26a. предел одновременных задач не проби
   const created = fs.readdirSync(path.join(data, "jobs")).filter((f) => f.endsWith(".json"));
   assert.equal(created.length, 1, "отклонённая задача всё же оставила след в хранилище");
   v1.kill();
-  delete process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS;
+  delete process.env.TANDEM_MAX_PARALLEL_JOBS;
 });
 
 await t("26b. нулевой предел снимает ограничение", async () => {
@@ -1761,7 +1761,7 @@ await t("26b. нулевой предел снимает ограничение"
   const data = path.join(d, "data");
   process.env.CLAUDE_PLUGIN_DATA = data;
   process.env.CODEX_BIN = path.join(d, "codex-которого-нет");
-  process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS = "0";
+  process.env.TANDEM_MAX_PARALLEL_JOBS = "0";
   const v2 = victim();
   fakeLiveJob(data, "job-bbbbbbbb", { pid: v2.pid });
 
@@ -1769,7 +1769,7 @@ await t("26b. нулевой предел снимает ограничение"
   const job = core.startJob({ mode: "delegate", task: "вторая", cwd: d, prompt: "x" });
   assert.ok(job?.id, "при нулевом пределе задача не запустилась");
   v2.kill();
-  delete process.env.CODEX_BRIDGE_MAX_PARALLEL_JOBS;
+  delete process.env.TANDEM_MAX_PARALLEL_JOBS;
 });
 
 await t("26c. задача, висящая дольше двойного таймаута, живой не считается", async () => {
@@ -1777,7 +1777,7 @@ await t("26c. задача, висящая дольше двойного тай�
   const data = path.join(d, "data");
   process.env.CLAUDE_PLUGIN_DATA = data;
   process.env.CODEX_BIN = path.join(d, "codex-которого-нет");
-  process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN = "1";
+  process.env.TANDEM_JOB_TIMEOUT_MIN = "1";
   // Три минуты при таймауте в одну: воркер убил бы её давно, значит под этим
   // pid работает уже чужой процесс.
   const v3 = victim();
@@ -1786,7 +1786,7 @@ await t("26c. задача, висящая дольше двойного тай�
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?l3=${Date.now()}`);
   assert.equal(core.liveJobs().length, 0, "переиспользованный pid принят за живую задачу");
   try { v3.kill(); } catch {}
-  delete process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN;
+  delete process.env.TANDEM_JOB_TIMEOUT_MIN;
 });
 
 await tExec("26d. предел выдерживается при одновременном запуске из двух процессов", async () => {
@@ -1812,7 +1812,7 @@ try {
     ...process.env,
     CLAUDE_PLUGIN_DATA: data,
     CODEX_BIN: path.join(d, "codex"),
-    CODEX_BRIDGE_MAX_PARALLEL_JOBS: "1",
+    TANDEM_MAX_PARALLEL_JOBS: "1",
   };
   const run = () =>
     new Promise((resolve) => {
@@ -1873,7 +1873,7 @@ await t("29. у каждой команды объявлен свой набор
 // ───────────────────────────────── 30. Язык описаний и промптов
 
 await t("30a. по умолчанию промпты и описания уходят на английском", async () => {
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
   const i18n = await import(`${ROOT_URL}/scripts/i18n.mjs?en=${Date.now()}`);
   assert.equal(i18n.lang(), "en");
   assert.match(i18n.prompt("ask", "why?"), /second opinion/, "промпт не на английском");
@@ -1881,15 +1881,15 @@ await t("30a. по умолчанию промпты и описания ухо�
 });
 
 await t("30b. настройка переключает язык, неизвестное значение игнорируется", async () => {
-  process.env.CODEX_BRIDGE_LANG = "ru";
+  process.env.TANDEM_LANG = "ru";
   const ru = await import(`${ROOT_URL}/scripts/i18n.mjs?ru=${Date.now()}`);
   assert.equal(ru.lang(), "ru");
   assert.match(ru.prompt("ask", "почему?"), /второе мнение/, "русский промпт не подставился");
   assert.match(ru.toolText().ask_d, /Спросить у GPT/, "русское описание не подставилось");
 
-  process.env.CODEX_BRIDGE_LANG = "klingon";
+  process.env.TANDEM_LANG = "klingon";
   assert.equal(ru.lang(), "en", "неизвестный язык не откатился к английскому");
-  delete process.env.CODEX_BRIDGE_LANG;
+  delete process.env.TANDEM_LANG;
 });
 
 await t("30c. недостающий перевод не оставляет описание пустым", async () => {
@@ -1901,11 +1901,11 @@ await t("30c. недостающий перевод не оставляет оп
 
   // Таблицы читаются на каждый вызов, поэтому язык переключается переменной.
   const both = (fn) => {
-    delete process.env.CODEX_BRIDGE_LANG;
+    delete process.env.TANDEM_LANG;
     const en = fn();
-    process.env.CODEX_BRIDGE_LANG = "ru";
+    process.env.TANDEM_LANG = "ru";
     const ru = fn();
-    delete process.env.CODEX_BRIDGE_LANG;
+    delete process.env.TANDEM_LANG;
     return { en, ru };
   };
 
@@ -1943,19 +1943,19 @@ await t("30d. команды и агенты остаются на англий�
 // ───────────────────────────────── 31. Нативное ревью через app-server
 
 await t("31a. backend ревью выбирается настройкой, exec остаётся по умолчанию", async () => {
-  delete process.env.CODEX_BRIDGE_REVIEW_BACKEND;
+  delete process.env.TANDEM_REVIEW_BACKEND;
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?rb=${Date.now()}`);
   assert.equal(core.reviewBackend(), "exec");
-  process.env.CODEX_BRIDGE_REVIEW_BACKEND = "app-server";
+  process.env.TANDEM_REVIEW_BACKEND = "app-server";
   assert.equal(core.reviewBackend(), "app-server");
-  process.env.CODEX_BRIDGE_REVIEW_BACKEND = "неизвестный";
+  process.env.TANDEM_REVIEW_BACKEND = "неизвестный";
   assert.equal(core.reviewBackend(), "exec", "неизвестное значение не откатилось к безопасному backend");
-  delete process.env.CODEX_BRIDGE_REVIEW_BACKEND;
+  delete process.env.TANDEM_REVIEW_BACKEND;
 
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"));
   assert.equal(manifest.userConfig.review_backend.default, "exec");
   const mcp = JSON.parse(fs.readFileSync(path.join(ROOT, ".mcp.json"), "utf8"));
-  assert.equal(mcp.mcpServers.codex.env.CODEX_BRIDGE_REVIEW_BACKEND, "${user_config.review_backend}");
+  assert.equal(mcp.mcpServers.codex.env.TANDEM_REVIEW_BACKEND, "${user_config.review_backend}");
 });
 
 await t("31b. отказ app-server до принятия review/start запускает exec fallback", async () => {
@@ -2165,7 +2165,7 @@ console.log("ok");`,
     );
 
     const child = spawn(process.execPath, [path.join(ROOT, "bridge", "mcp-claude.mjs")], {
-      env: { ...process.env, CLAUDE_BIN: claude, CODEX_BRIDGE_EXPOSED: exposed },
+      env: { ...process.env, CLAUDE_BIN: claude, TANDEM_EXPOSED: exposed },
     });
     const messages = [];
     const stderr = [];
@@ -2235,9 +2235,9 @@ await t("34e. setup сообщает конфликт link-back и выходи�
     encoding: "utf8",
     env: {
       ...process.env,
-      CODEX_BRIDGE_LANG: "en",
-      CODEX_BRIDGE_CONFIG: config,
-      CODEX_BRIDGE_EXPOSED: path.join(d, "exposed.json"),
+      TANDEM_LANG: "en",
+      TANDEM_CONFIG: config,
+      TANDEM_EXPOSED: path.join(d, "exposed.json"),
       CLAUDE_PLUGIN_DATA: path.join(d, "data"),
       CODEX_BIN: process.execPath,
       CLAUDE_BIN: process.execPath,
@@ -2254,7 +2254,7 @@ await t("34f. quoted TOML-таблица claude-bridge тоже считаетс
   const config = path.join(d, "config.toml");
   const original = '[mcp_servers."claude-bridge"]\ncommand = "custom"\n';
   fs.writeFileSync(config, original);
-  process.env.CODEX_BRIDGE_CONFIG = config;
+  process.env.TANDEM_CONFIG = config;
   const root = path.join(d, "plugin");
   fs.mkdirSync(path.join(root, "bridge"), { recursive: true });
   fs.writeFileSync(path.join(root, "bridge", "mcp-claude.mjs"), "");
@@ -2268,7 +2268,7 @@ await tExec("34g. атомарная перезапись config.toml сохра
   const config = path.join(d, "config.toml");
   fs.writeFileSync(config, 'model = "x"\n', { mode: 0o600 });
   fs.chmodSync(config, 0o600);
-  process.env.CODEX_BRIDGE_CONFIG = config;
+  process.env.TANDEM_CONFIG = config;
   const root = path.join(d, "plugin");
   fs.mkdirSync(path.join(root, "bridge"), { recursive: true });
   fs.writeFileSync(path.join(root, "bridge", "mcp-claude.mjs"), "");
@@ -2298,7 +2298,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const started = Date.now();
   await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(ROOT, "bridge", "mcp-claude.mjs")], {
-      env: { ...process.env, CODEX_BRIDGE_EXPOSED: exposed },
+      env: { ...process.env, TANDEM_EXPOSED: exposed },
     });
     const stderr = [];
     child.stderr.on("data", (chunk) => stderr.push(chunk));
@@ -2376,7 +2376,7 @@ await t("32a. скалярное JSON-сообщение не роняет MCP-�
     input: 'null\n"строка"\n{"jsonrpc":"2.0","id":7,"method":"ping"}\n',
     encoding: "utf8",
     timeout: 20_000,
-    env: { ...process.env, CODEX_BRIDGE_LANG: "en", CLAUDE_PLUGIN_DATA: path.join(d, "data") },
+    env: { ...process.env, TANDEM_LANG: "en", CLAUDE_PLUGIN_DATA: path.join(d, "data") },
   });
   const out = `${r.stdout}`;
   assert.ok(!/TypeError|Cannot destructure/.test(`${r.stdout}${r.stderr}`), "сервер упал на скаляре");
@@ -2392,7 +2392,7 @@ await t("32b. слишком длинная строка отвергается 
     encoding: "utf8",
     timeout: 30_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, CODEX_BRIDGE_LANG: "en", CLAUDE_PLUGIN_DATA: path.join(d, "data") },
+    env: { ...process.env, TANDEM_LANG: "en", CLAUDE_PLUGIN_DATA: path.join(d, "data") },
   });
   assert.match(`${r.stdout}`, /"code":-32600/, "предел размера сообщения не сработал");
   assert.match(`${r.stdout}`, /"id":2[,}]/, "сервер не пережил слишком длинное сообщение");
@@ -2506,7 +2506,7 @@ await t("32e. задача с чужим pid и протухшей меткой 
 
 await t("32f. таймаут задачи из настройки проверяется", async () => {
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs?jt=${Date.now()}`);
-  const prev = process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN;
+  const prev = process.env.TANDEM_JOB_TIMEOUT_MIN;
   for (const [value, expected] of [
     ["-5", 30],
     ["мусор", 30],
@@ -2514,11 +2514,11 @@ await t("32f. таймаут задачи из настройки проверя
     ["10000", 480],
     ["45", 45],
   ]) {
-    process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN = value;
+    process.env.TANDEM_JOB_TIMEOUT_MIN = value;
     assert.equal(core.jobTimeoutMs(), expected * 60_000, `значение ${value} принято как есть`);
   }
-  if (prev === undefined) delete process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN;
-  else process.env.CODEX_BRIDGE_JOB_TIMEOUT_MIN = prev;
+  if (prev === undefined) delete process.env.TANDEM_JOB_TIMEOUT_MIN;
+  else process.env.TANDEM_JOB_TIMEOUT_MIN = prev;
 });
 
 await t("32g. содержимое отслеживаемого файла с секретами не уходит в диф", async () => {

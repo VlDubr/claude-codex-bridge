@@ -1,7 +1,7 @@
 ---
 description: Select the default Codex model for this repository
 argument-hint: "[<model>] [--effort <level>] [--clear]"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_use, mcp__plugin_codex-bridge_codex__codex_models
+allowed-tools: mcp__plugin_tandem_codex__codex_use, mcp__plugin_tandem_codex__codex_models
 ---
 
 The user is selecting a Codex model: `$ARGUMENTS`

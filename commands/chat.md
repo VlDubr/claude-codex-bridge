@@ -1,7 +1,7 @@
 ---
 description: Talk to a Codex model as a separate conversational partner (the thread remembers previous turns)
 argument-hint: "[--model <model>] [--chat <name>] [--write] <message>"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_chat, mcp__plugin_codex-bridge_codex__codex_chats
+allowed-tools: mcp__plugin_tandem_codex__codex_chat, mcp__plugin_tandem_codex__codex_chats
 ---
 
 The user is addressing a Codex model: `$ARGUMENTS`

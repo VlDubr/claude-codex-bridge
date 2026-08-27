@@ -106,7 +106,7 @@ const MESSAGES = {
       "WARNING: bypass_sandbox is enabled — Codex runs commands without isolation. This is an emergency mode; disable it after repairing the Codex installation.",
     setup_images: (dir) => `images → ${dir} (built-in image_gen, no API key)`,
     setup_back_bridge: (linked) =>
-      `GPT→Claude bridge: ${linked ? "connected" : "not connected (enable: /codex-bridge:setup --link-back)"}`,
+      `GPT→Claude bridge: ${linked ? "connected" : "not connected (enable: /tandem:setup --link-back)"}`,
     setup_path_stale: "          path is stale and will be fixed at the next session start",
     setup_proxy_summary: (names, allowTask) =>
       `exposed to Codex: ${names.length ? names.join(", ") : "nothing exposed"}` +
@@ -115,8 +115,8 @@ const MESSAGES = {
     setup_servers_none: "  (nothing found in ~/.claude.json or ./.mcp.json)",
     setup_transport_unsupported: "  — unsupported (stdio only)",
     setup_already_exposed: "  [already exposed]",
-    setup_expose_hint: "Expose:  /codex-bridge:setup --expose <name> [--tools a,b,c]",
-    setup_server_not_found: (name) => `Server "${name}" was not found. List: /codex-bridge:setup --expose-list`,
+    setup_expose_hint: "Expose:  /tandem:setup --expose <name> [--tools a,b,c]",
+    setup_server_not_found: (name) => `Server "${name}" was not found. List: /tandem:setup --expose-list`,
     setup_server_transport: (name, transport) =>
       `Server "${name}" uses the ${transport} transport. The bridge supports only stdio: ` +
       "HTTP/SSE servers with their own authentication must be connected directly in ~/.codex/config.toml.",
@@ -132,7 +132,7 @@ const MESSAGES = {
     setup_back_added: (file) => `Reverse bridge added to ${file}`,
     setup_back_updated: (file) => `Reverse bridge updated in ${file}`,
     setup_back_removed: (file) => `Reverse bridge removed from ${file}`,
-    setup_back_not_found: "The codex-bridge block was not found in config.toml.",
+    setup_back_not_found: "The tandem block was not found in config.toml.",
     setup_config_not_found: "config.toml was not found; there is nothing to remove.",
 
     proxy_stdio_required: (alias) => `${alias}: skipped; only stdio servers are supported (the command field is required)`,
@@ -148,20 +148,20 @@ const MESSAGES = {
     client_unavailable: (alias) => `${alias}: server unavailable`,
 
     linkback_managed_block:
-      "# Managed by the codex-bridge plugin. The path updates automatically when the\n" +
+      "# Managed by the tandem plugin. The path updates automatically when the\n" +
       "# plugin updates — edits inside this block will be overwritten.",
     linkback_conflict: (configPath, table) =>
       `${configPath} already declares a [${table}] table that this plugin did not write. ` +
       `Adding a second one would make the file invalid TOML. Remove or rename the existing table and retry.`,
 
     preflight_path_updated: (from, to) =>
-      `[codex-bridge] The reverse-bridge path in ~/.codex/config.toml was updated after a plugin update.\n` +
+      `[tandem] The reverse-bridge path in ~/.codex/config.toml was updated after a plugin update.\n` +
       `  was: ${from}\n  now: ${to}\n  Restart Codex so it picks up the new path.`,
-    preflight_check_failed: (reason) => `[codex-bridge] Could not check the reverse bridge: ${reason}`,
-    preflight_not_installed: "[codex-bridge] Codex CLI not found. Install: npm install -g @openai/codex, then codex login.",
-    preflight_not_logged_in: "[codex-bridge] Codex is installed but not authorised. Run: codex login",
+    preflight_check_failed: (reason) => `[tandem] Could not check the reverse bridge: ${reason}`,
+    preflight_not_installed: "[tandem] Codex CLI not found. Install: npm install -g @openai/codex, then codex login.",
+    preflight_not_logged_in: "[tandem] Codex is installed but not authorised. Run: codex login",
     preflight_probe_timeout:
-      "[codex-bridge] The Codex readiness check did not finish in time. Codex itself may be fine; check by hand: codex login status",
+      "[tandem] The Codex readiness check did not finish in time. Codex itself may be fine; check by hand: codex login status",
   },
 
   ru: {
@@ -269,7 +269,7 @@ const MESSAGES = {
       "ВНИМАНИЕ: включён bypass_sandbox — Codex выполняет команды без изоляции. Это аварийный режим; после починки установки Codex выключите его.",
     setup_images: (dir) => `изображения → ${dir} (встроенный image_gen, без API-ключа)`,
     setup_back_bridge: (linked) =>
-      `мост GPT→Claude: ${linked ? "подключён" : "не подключён (включить: /codex-bridge:setup --link-back)"}`,
+      `мост GPT→Claude: ${linked ? "подключён" : "не подключён (включить: /tandem:setup --link-back)"}`,
     setup_path_stale: "          путь устарел, будет исправлен при следующем старте сессии",
     setup_proxy_summary: (names, allowTask) =>
       `проброс в Codex: ${names.length ? names.join(", ") : "ничего не проброшено"}` +
@@ -278,8 +278,8 @@ const MESSAGES = {
     setup_servers_none: "  (ничего не найдено в ~/.claude.json и ./.mcp.json)",
     setup_transport_unsupported: "  — не поддерживается (только stdio)",
     setup_already_exposed: "  [уже проброшен]",
-    setup_expose_hint: "Пробросить:  /codex-bridge:setup --expose <имя> [--tools a,b,c]",
-    setup_server_not_found: (name) => `Сервер "${name}" не найден. Список: /codex-bridge:setup --expose-list`,
+    setup_expose_hint: "Пробросить:  /tandem:setup --expose <имя> [--tools a,b,c]",
+    setup_server_not_found: (name) => `Сервер "${name}" не найден. Список: /tandem:setup --expose-list`,
     setup_server_transport: (name, transport) =>
       `Сервер "${name}" использует транспорт ${transport}. Мост умеет только stdio: ` +
       "HTTP/SSE-серверы с собственной авторизацией нужно подключать к Codex напрямую в ~/.codex/config.toml.",
@@ -295,7 +295,7 @@ const MESSAGES = {
     setup_back_added: (file) => `Обратный мост добавлен в ${file}`,
     setup_back_updated: (file) => `Обратный мост обновлён в ${file}`,
     setup_back_removed: (file) => `Обратный мост удалён из ${file}`,
-    setup_back_not_found: "Блок codex-bridge в config.toml не найден.",
+    setup_back_not_found: "Блок tandem в config.toml не найден.",
     setup_config_not_found: "config.toml не найден — нечего удалять.",
 
     proxy_stdio_required: (alias) => `${alias}: пропущен, поддерживаются только stdio-серверы (нужно поле command)`,
@@ -311,20 +311,20 @@ const MESSAGES = {
     client_unavailable: (alias) => `${alias}: сервер недоступен`,
 
     linkback_managed_block:
-      "# Управляется плагином codex-bridge. Путь обновляется автоматически при\n" +
+      "# Управляется плагином tandem. Путь обновляется автоматически при\n" +
       "# обновлении плагина — правки внутри блока будут перезаписаны.",
     linkback_conflict: (configPath, table) =>
       `В ${configPath} уже есть таблица [${table}], объявленная не этим плагином. ` +
       `Добавление второй сделало бы файл невалидным TOML. Удалите или переименуйте существующую таблицу и повторите.`,
 
     preflight_path_updated: (from, to) =>
-      `[codex-bridge] Путь обратного моста в ~/.codex/config.toml обновлён после обновления плагина.\n` +
+      `[tandem] Путь обратного моста в ~/.codex/config.toml обновлён после обновления плагина.\n` +
       `  было: ${from}\n  стало: ${to}\n  Перезапусти Codex, чтобы он подхватил новый путь.`,
-    preflight_check_failed: (reason) => `[codex-bridge] Не удалось проверить обратный мост: ${reason}`,
-    preflight_not_installed: "[codex-bridge] Codex CLI не найден. Установка: npm install -g @openai/codex, затем codex login.",
-    preflight_not_logged_in: "[codex-bridge] Codex установлен, но не авторизован. Выполни: codex login",
+    preflight_check_failed: (reason) => `[tandem] Не удалось проверить обратный мост: ${reason}`,
+    preflight_not_installed: "[tandem] Codex CLI не найден. Установка: npm install -g @openai/codex, затем codex login.",
+    preflight_not_logged_in: "[tandem] Codex установлен, но не авторизован. Выполни: codex login",
     preflight_probe_timeout:
-      "[codex-bridge] Проверка готовности Codex не завершилась за отведённое время. Сам Codex может быть исправен; проверь вручную: codex login status",
+      "[tandem] Проверка готовности Codex не завершилась за отведённое время. Сам Codex может быть исправен; проверь вручную: codex login status",
   },
 };
 

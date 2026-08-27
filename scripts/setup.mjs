@@ -100,7 +100,7 @@ lines.push("", formatCodex(health), "");
 if (bypassOn()) {
   lines.push(message("setup_bypass_warning"));
 }
-lines.push(message("setup_images", envClean("CODEX_BRIDGE_IMAGE_DIR") || "assets/generated"));
+lines.push(message("setup_images", envClean("TANDEM_IMAGE_DIR") || "assets/generated"));
 
 const back = isLinked();
 lines.push(message("setup_back_bridge", back));

@@ -1,7 +1,7 @@
 ---
 description: Adversarial review — GPT challenges a design decision
 argument-hint: "[--base <branch>] [--now] <what to challenge>"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_challenge
+allowed-tools: mcp__plugin_tandem_codex__codex_challenge
 ---
 
 The user is requesting an adversarial review. Arguments: `$ARGUMENTS`

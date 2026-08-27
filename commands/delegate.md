@@ -1,7 +1,7 @@
 ---
 description: Delegate a task to GPT to investigate and fix independently
 argument-hint: "[--model <model>] [--effort <level>] <task description>"
-allowed-tools: mcp__plugin_codex-bridge_codex__codex_delegate
+allowed-tools: mcp__plugin_tandem_codex__codex_delegate
 ---
 
 The user is delegating a task to GPT. Arguments: `$ARGUMENTS`

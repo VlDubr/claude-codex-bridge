@@ -13,7 +13,7 @@ const LANGS = new Set(["en", "ru"]);
 
 /** Язык интерфейса. Значение вне набора игнорируется — молча падать некуда. */
 export function lang() {
-  const v = process.env.CODEX_BRIDGE_LANG;
+  const v = process.env.TANDEM_LANG;
   const t = typeof v === "string" ? v.trim().toLowerCase() : "";
   return LANGS.has(t) ? t : "en";
 }
@@ -564,10 +564,10 @@ const CORE = {
       `helpers in ~/.codex/.sandbox-bin of another).\n` +
       `What to do: reinstall Codex entirely (npm install -g @openai/codex) — that fixes the cause; ` +
       `or, as a temporary workaround, turn on the plugin's bypass_sandbox setting, ` +
-      `but then Codex runs commands without isolation. Diagnostics: /codex-bridge:setup`,
+      `but then Codex runs commands without isolation. Diagnostics: /tandem:setup`,
     mcp_cancelled:
       "Codex reported a cancelled tool call. If you cancelled nothing, the most likely cause is a Codex sandbox failure, " +
-      "which surfaces exactly like this. Check with: /codex-bridge:setup",
+      "which surfaces exactly like this. Check with: /tandem:setup",
     not_authorized: "Codex is not authorised, or the session expired. Run in a terminal: codex login",
     quota: "The ChatGPT subscription limit is reached. Wait for the quota to reset or switch to a cheaper model.",
     unknown_flag: (flag) =>
@@ -655,11 +655,11 @@ const CORE = {
       `хелперы в ~/.codex/.sandbox-bin другой).\n` +
       `Что делать: переустановить Codex целиком (npm install -g @openai/codex) — это решает причину; ` +
       `либо, как временный обход, включить настройку плагина bypass_sandbox, ` +
-      `но тогда Codex будет выполнять команды без изоляции. Диагностика: /codex-bridge:setup`,
+      `но тогда Codex будет выполнять команды без изоляции. Диагностика: /tandem:setup`,
     mcp_cancelled:
       "Codex сообщил об отмене вызова инструмента. Если вы ничего не отменяли, " +
       "наиболее вероятная причина — сбой песочницы Codex, который выходит наружу именно так. " +
-      "Проверьте: /codex-bridge:setup",
+      "Проверьте: /tandem:setup",
     not_authorized: "Codex не авторизован или сессия истекла. Выполни в терминале: codex login",
     quota: "Достигнут лимит подписки ChatGPT. Подожди сброса квоты или смени модель на более дешёвую.",
     unknown_flag: (flag) =>

@@ -206,9 +206,9 @@ export function validateEffort(model, effort) {
   if (!EFFORT_LEVELS.includes(effort)) {
     return message("effort_unknown", effort, EFFORT_LEVELS);
   }
-  const supported = effortsFor(model || envClean("CODEX_BRIDGE_MODEL"));
+  const supported = effortsFor(model || envClean("TANDEM_MODEL"));
   if (supported && !supported.includes(effort)) {
-    return message("effort_unsupported", model || envClean("CODEX_BRIDGE_MODEL"), effort, supported);
+    return message("effort_unsupported", model || envClean("TANDEM_MODEL"), effort, supported);
   }
   return null;
 }

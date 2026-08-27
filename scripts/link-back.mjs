@@ -18,10 +18,10 @@ const envClean = (n) => {
   return !t || /^\$\{.*\}$/.test(t) ? undefined : t;
 };
 
-export const CONFIG_PATH = envClean("CODEX_BRIDGE_CONFIG") || path.join(os.homedir(), ".codex", "config.toml");
+export const CONFIG_PATH = envClean("TANDEM_CONFIG") || path.join(os.homedir(), ".codex", "config.toml");
 
-const MARK_START = "# >>> codex-bridge (claude) >>>";
-const MARK_END = "# <<< codex-bridge (claude) <<<";
+const MARK_START = "# >>> tandem (claude) >>>";
+const MARK_END = "# <<< tandem (claude) <<<";
 const SERVER_TABLE = "mcp_servers.claude-bridge";
 
 const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -53,7 +53,7 @@ ${message("linkback_managed_block")}
 [${SERVER_TABLE}]
 command = "node"
 args = [${tomlString(bridge)}]
-env = { CODEX_BRIDGE_LANG = ${tomlString(lang())} }
+env = { TANDEM_LANG = ${tomlString(lang())} }
 ${MARK_END}`;
 }
 
@@ -77,7 +77,7 @@ function foreignTable(text) {
 
 function writeAtomic(content) {
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-  const tmp = `${CONFIG_PATH}.codex-bridge.${process.pid}.tmp`;
+  const tmp = `${CONFIG_PATH}.tandem.${process.pid}.tmp`;
   let mode = 0o600;
   try {
     mode = fs.statSync(CONFIG_PATH).mode & 0o777;
@@ -111,7 +111,7 @@ function hasCurrentLanguage() {
   const cur = read();
   if (!cur) return false;
   const managed = new RegExp(`${esc(MARK_START)}[\\s\\S]*?${esc(MARK_END)}`, "m").exec(cur)?.[0];
-  return Boolean(managed?.includes(`env = { CODEX_BRIDGE_LANG = ${tomlString(lang())} }`));
+  return Boolean(managed?.includes(`env = { TANDEM_LANG = ${tomlString(lang())} }`));
 }
 
 export function link(root = pluginRoot()) {

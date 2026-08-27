@@ -294,7 +294,7 @@ async function dispatchTool(name, args, ctx = {}) {
     const problem = await guard();
     if (problem) return err(problem);
   }
-  const cwd = envClean("CODEX_BRIDGE_CWD") || envClean("CLAUDE_PROJECT_DIR") || process.cwd();
+  const cwd = envClean("TANDEM_CWD") || envClean("CLAUDE_PROJECT_DIR") || process.cwd();
 
   if (args.effort) {
     const bad = validateEffort(args.model, args.effort);
@@ -587,4 +587,4 @@ async function dispatchTool(name, args, ctx = {}) {
   }
 }
 
-serve({ name: "codex-bridge", version: pluginVersion(), tools: TOOLS, handle: handleTool });
+serve({ name: "tandem", version: pluginVersion(), tools: TOOLS, handle: handleTool });

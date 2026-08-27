@@ -28,7 +28,7 @@ const MAX_LINE_BYTES = 16 * 1024 * 1024;
  * версия клиента задета дефектом, лента должна выключаться без правки кода.
  */
 const progressEnabled = () => {
-  const v = String(process.env.CODEX_BRIDGE_PROGRESS ?? "").trim().toLowerCase();
+  const v = String(process.env.TANDEM_PROGRESS ?? "").trim().toLowerCase();
   return !(v === "off" || v === "false" || v === "0" || v === "no");
 };
 

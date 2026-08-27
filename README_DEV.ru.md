@@ -1,4 +1,4 @@
-# Claude Codex Bridge — документация для разработки
+# Tandem — документация для разработки
 
 **Русский** · [English](README_DEV.md)
 
@@ -23,7 +23,7 @@
 ## Структура
 
 ```
-claude-codex-bridge/
+tandem/
 ├── .claude-plugin/
 │   ├── plugin.json          манифест, userConfig, defaultEnabled: false
 │   └── marketplace.json     каталог из одного плагина, source: "."
@@ -70,9 +70,9 @@ claude-codex-bridge/
 
 | Что | Значение | На что влияет |
 |---|---|---|
-| Репозиторий | `claude-codex-bridge` | `/plugin marketplace add VlDubr/claude-codex-bridge` |
-| Маркетплейс (`marketplace.json` → `name`) | `claude-codex-bridge` | правая часть в `codex-bridge@claude-codex-bridge` |
-| Плагин (`plugin.json` → `name`) | `codex-bridge` | **префикс слэш-команд и субагентов**: `/codex-bridge:review`, `@codex-bridge:gpt-advisor` |
+| Репозиторий | `tandem` | `/plugin marketplace add VlDubr/tandem` |
+| Маркетплейс (`marketplace.json` → `name`) | `tandem` | правая часть в `tandem@tandem` |
+| Плагин (`plugin.json` → `name`) | `tandem` | **префикс слэш-команд и субагентов**: `/tandem:review`, `@tandem:gpt-advisor` |
 
 Префикс никогда не опускается: даже если имя команды совпадает с именем плагина, вызов всё равно будет `/plugin:command`. Поэтому имя плагина держим коротким — оно попадает в каждую команду. Переименование `plugin.json` → `name` меняет все команды разом и ломает мышечную память пользователей, так что делать это стоит только с бампом мажорной версии.
 
@@ -82,7 +82,7 @@ claude-codex-bridge/
 
 ### Язык наружных текстов
 
-Плагин писался на русском целиком, включая промпты. Промпт на русском заставляет и Codex, и Claude отвечать по-русски, поэтому для нерусскоязычного пользователя это был не «плагин с русской документацией», а плагин, меняющий язык его вывода. Английский стал языком по умолчанию, русский включается настройкой `language` (`CODEX_BRIDGE_LANG=ru`).
+Плагин писался на русском целиком, включая промпты. Промпт на русском заставляет и Codex, и Claude отвечать по-русски, поэтому для нерусскоязычного пользователя это был не «плагин с русской документацией», а плагин, меняющий язык его вывода. Английский стал языком по умолчанию, русский включается настройкой `language` (`TANDEM_LANG=ru`).
 
 Всё, что видит пользователь или вызываемая модель, лежит в файлах `i18n*.mjs`: `i18n.mjs` (промпты и тексты ядра), `i18n-runtime.mjs` (сообщения времени выполнения), `i18n-image.mjs`, `i18n-claude.mjs`. `lang()` игнорирует значение вне набора, а не падает: сообщать об ошибке некуда. Комментарии в коде остаются русскими — их видит автор, а не пользователь.
 
@@ -212,7 +212,7 @@ running ──► done | failed | cancelled | timeout | unknown
 Файл принадлежит пользователю, поэтому все правки — только внутри маркированного блока. Тонкости, каждая из которых была багом:
 
 - **Замена через функцию.** `str.replace(re, block)` интерпретирует `$&`, `$1`, `$'` в строке замены: путь плагина с `$&` вставлял внутрь результата старый блок. Только `replace(re, () => block)`.
-- **Экранирование маркеров.** `# >>> codex-bridge (claude) >>>` содержит скобки — в `RegExp` идёт только через `esc()`, иначе блок не находится никогда, а повторный `--link-back` плодит дубликаты.
+- **Экранирование маркеров.** `# >>> tandem (claude) >>>` содержит скобки — в `RegExp` идёт только через `esc()`, иначе блок не находится никогда, а повторный `--link-back` плодит дубликаты.
 - **Глобальная регулярка.** Блоков могло накопиться несколько; `unlink()` удаляет все.
 - **Экранирование TOML-строки.** Кавычка в пути ломала файл. `tomlString()` экранирует `\`, `"` и управляющие символы.
 - **Конфликт.** Если у пользователя уже есть неуправляемая `[mcp_servers.claude-bridge]`, вторая таблица сделает TOML невалидным — операция отклоняется, файл не трогается.
@@ -305,16 +305,16 @@ claude plugin validate . --strict
 
 ### Несколько плагинов в репозитории
 
-Если появятся другие плагины, перенесите текущий в `plugins/codex-bridge/` и поменяйте `source` на `"./plugins/codex-bridge"`. Пути в записях разрешаются относительно каталога, содержащего `.claude-plugin/`.
+Если появятся другие плагины, перенесите текущий в `plugins/tandem/` и поменяйте `source` на `"./plugins/tandem"`. Пути в записях разрешаются относительно каталога, содержащего `.claude-plugin/`.
 
 ---
 
 ## Отладка
 
 ```bash
-claude --plugin-dir /путь/к/claude-codex-bridge   # запуск без установки
+claude --plugin-dir /путь/к/tandem   # запуск без установки
 claude --debug                             # загрузка плагина, инициализация MCP
-/codex-bridge:setup                               # диагностика окружения
+/tandem:setup                               # диагностика окружения
 ```
 
 MCP-сервер можно позвать напрямую:
@@ -326,11 +326,11 @@ printf '%s\n' \
   | node scripts/mcp-codex.mjs
 ```
 
-Обратный мост — так же, `node bridge/mcp-claude.mjs`; он читает allowlist из `CODEX_BRIDGE_EXPOSED` (по умолчанию `~/.codex/codex-bridge/exposed.json`).
+Обратный мост — так же, `node bridge/mcp-claude.mjs`; он читает allowlist из `TANDEM_EXPOSED` (по умолчанию `~/.codex/tandem/exposed.json`).
 
-Полезные переменные окружения для тестов и отладки: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `CODEX_BRIDGE_CONFIG`, `CODEX_BRIDGE_EXPOSED`, `CODEX_HOME`.
+Полезные переменные окружения для тестов и отладки: `CODEX_BIN`, `CLAUDE_BIN`, `CLAUDE_PLUGIN_DATA`, `TANDEM_CONFIG`, `TANDEM_EXPOSED`, `CODEX_HOME`.
 
-Каждая настройка плагина приходит и как переменная окружения — именно так их задают тесты: `CODEX_BRIDGE_LANG`, `CODEX_BRIDGE_MODEL`, `CODEX_BRIDGE_EFFORT`, `CODEX_BRIDGE_REASONING_SUMMARY`, `CODEX_BRIDGE_REVIEW_BACKEND`, `CODEX_BRIDGE_PROGRESS`, `CODEX_BRIDGE_MAX_PARALLEL_JOBS`, `CODEX_BRIDGE_JOB_TIMEOUT_MIN`, `CODEX_BRIDGE_IMAGE_DIR`, `CODEX_BRIDGE_IMAGE_TIMEOUT_MIN`, `CODEX_BRIDGE_BYPASS_SANDBOX`.
+Каждая настройка плагина приходит и как переменная окружения — именно так их задают тесты: `TANDEM_LANG`, `TANDEM_MODEL`, `TANDEM_EFFORT`, `TANDEM_REASONING_SUMMARY`, `TANDEM_REVIEW_BACKEND`, `TANDEM_PROGRESS`, `TANDEM_MAX_PARALLEL_JOBS`, `TANDEM_JOB_TIMEOUT_MIN`, `TANDEM_IMAGE_DIR`, `TANDEM_IMAGE_TIMEOUT_MIN`, `TANDEM_BYPASS_SANDBOX`.
 
 ---
 
@@ -345,7 +345,7 @@ printf '%s\n' \
 
 Протокол `codex app-server` из этого списка выбыл: имена методов, необязательность поля `jsonrpc`, форма item и счётчики `thread/tokenUsage/updated` проверены на живом бинаре.
 
-Первый прогон на настоящем окружении должен идти по возрастанию риска: `/codex-bridge:setup` → `/codex-bridge:models` → `/codex-bridge:review` → `/codex-bridge:delegate` → `/codex-bridge:image`.
+Первый прогон на настоящем окружении должен идти по возрастанию риска: `/tandem:setup` → `/tandem:models` → `/tandem:review` → `/tandem:delegate` → `/tandem:image`.
 
 ## Вклад
 

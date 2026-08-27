@@ -2,7 +2,7 @@
 // и переэкспортирует их инструменты под префиксом, чтобы их увидел Codex.
 //
 // Ничего не экспортируется без явного разрешения: файл allowlist создаётся
-// только командой /codex-bridge:setup --expose <server>.
+// только командой /tandem:setup --expose <server>.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -18,7 +18,7 @@ const cleanEnv = (n) => {
 };
 
 export const EXPOSED_PATH =
-  cleanEnv("CODEX_BRIDGE_EXPOSED") || path.join(os.homedir(), ".codex", "codex-bridge", "exposed.json");
+  cleanEnv("TANDEM_EXPOSED") || path.join(os.homedir(), ".codex", "tandem", "exposed.json");
 
 export function readExposed() {
   try {

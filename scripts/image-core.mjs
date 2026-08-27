@@ -312,7 +312,7 @@ export function generateImage(opts) {
     out_dir,
     name,
     cwd = process.cwd(),
-    timeoutMs = (Number(envClean("CODEX_BRIDGE_IMAGE_TIMEOUT_MIN")) || 15) * 60_000,
+    timeoutMs = (Number(envClean("TANDEM_IMAGE_TIMEOUT_MIN")) || 15) * 60_000,
     signal,
   } = opts;
 
@@ -328,7 +328,7 @@ export function generateImage(opts) {
 
   let dir;
   try {
-    dir = resolveInside(cwd, out_dir || envClean("CODEX_BRIDGE_IMAGE_DIR") || "assets/generated", "out_dir");
+    dir = resolveInside(cwd, out_dir || envClean("TANDEM_IMAGE_DIR") || "assets/generated", "out_dir");
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }

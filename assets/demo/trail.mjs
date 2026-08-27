@@ -15,7 +15,7 @@ const say = async (line, wait = 420) => {
 };
 
 await say("");
-await say(`${cyan("›")} /codex-bridge:challenge ${bold("the capability cache")}`, 900);
+await say(`${cyan("›")} /tandem:challenge ${bold("the capability cache")}`, 900);
 await say("");
 await say(dim("  · session opened"), 500);
 await say(dim("  · started thinking"), 700);

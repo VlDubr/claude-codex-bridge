@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "codex-bridge",
-  "displayName": "Codex Bridge",
-  "version": "0.7.3",
+  "name": "tandem",
+  "displayName": "Tandem",
+  "version": "0.8.0",
   "description": "Bidirectional bridge between Claude Code and Codex (ChatGPT): code review, adversarial review, task delegation, background jobs, models consulting each other, and image generation via Codex's built-in tool. Runs on your existing ChatGPT subscription, no API keys.",
   "author": {
     "name": "VlDubr",
@@ -52,7 +52,7 @@
     "default_effort": {
       "type": "string",
       "title": "Default reasoning effort",
-      "description": "Reasoning level. The available set depends on the model — /codex-bridge:models shows the exact list. Only earlier-generation models accept minimal; gpt-5.6 and newer reject it.",
+      "description": "Reasoning level. The available set depends on the model — /tandem:models shows the exact list. Only earlier-generation models accept minimal; gpt-5.6 and newer reject it.",
       "required": false
     },
     "reasoning_summary": {
@@ -102,11 +102,11 @@
     "bypass_sandbox": {
       "type": "boolean",
       "title": "Bypass the Codex sandbox (emergency mode)",
-      "description": "Enable only if the Codex sandbox is broken by a version mismatch and /codex-bridge:setup confirms it. Codex will then run commands without isolation. The proper fix is to reinstall Codex.",
+      "description": "Enable only if the Codex sandbox is broken by a version mismatch and /tandem:setup confirms it. Codex will then run commands without isolation. The proper fix is to reinstall Codex.",
       "default": false,
       "required": false
     }
   },
-  "homepage": "https://github.com/VlDubr/claude-codex-bridge",
-  "repository": "https://github.com/VlDubr/claude-codex-bridge"
+  "homepage": "https://github.com/VlDubr/tandem",
+  "repository": "https://github.com/VlDubr/tandem"
 }
