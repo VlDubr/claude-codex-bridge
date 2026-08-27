@@ -176,10 +176,17 @@ await tExec("1b. --ask-for-approval добавляется, когда exec ег
   delete process.env.FAKE_HELP;
 });
 
+// image-core.mjs берёт возможности из codex-core.mjs, а тот запоминает их в
+// модульной переменной. Query-параметр в импорте создаёт новый экземпляр только
+// самого image-core: его статический `import "./codex-core.mjs"` — один и тот же
+// URL для всех тестов, поэтому проба выполняется один раз за прогон. Без
+// принудительного пересчёта тест 1d видел бы возможности, снятые в 1c.
 await t("1c. генерация изображений не добавляет --ask-for-approval без поддержки в exec", async () => {
   const d = fresh("caps-image");
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs`);
+  core.capabilities({ force: true });
   const image = await import(`${ROOT_URL}/scripts/image-core.mjs?caps3=${Date.now()}`);
 
   const args = image.buildImageArgs({ cwd: d });
@@ -192,10 +199,15 @@ await tExec("1d. генерация изображений добавляет --
   process.env.CODEX_BIN = fakeCodex(d);
   process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
   process.env.FAKE_HELP = "Usage: codex exec\n  --sandbox <mode>\n  --ask-for-approval <policy>\n  --cd <dir>";
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs`);
+  core.capabilities({ force: true });
   const image = await import(`${ROOT_URL}/scripts/image-core.mjs?caps4=${Date.now()}`);
   const args = image.buildImageArgs({ cwd: d });
   assert.ok(args.includes("--ask-for-approval"));
   delete process.env.FAKE_HELP;
+  // Возможности запомнены в общем экземпляре codex-core: не вернув их к
+  // умолчанию, мы протащили бы --ask-for-approval в остальные тесты image-core.
+  core.capabilities({ force: true });
 });
 
 // ───────────────────────────────── 2. Терминальные статусы фоновых задач
