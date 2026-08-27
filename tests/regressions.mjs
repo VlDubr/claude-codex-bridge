@@ -201,13 +201,45 @@ await tExec("1d. генерация изображений добавляет --
   process.env.FAKE_HELP = "Usage: codex exec\n  --sandbox <mode>\n  --ask-for-approval <policy>\n  --cd <dir>";
   const core = await import(`${ROOT_URL}/scripts/codex-core.mjs`);
   core.capabilities({ force: true });
-  const image = await import(`${ROOT_URL}/scripts/image-core.mjs?caps4=${Date.now()}`);
-  const args = image.buildImageArgs({ cwd: d });
-  assert.ok(args.includes("--ask-for-approval"));
-  delete process.env.FAKE_HELP;
-  // Возможности запомнены в общем экземпляре codex-core: не вернув их к
-  // умолчанию, мы протащили бы --ask-for-approval в остальные тесты image-core.
-  core.capabilities({ force: true });
+  try {
+    const image = await import(`${ROOT_URL}/scripts/image-core.mjs?caps4=${Date.now()}`);
+    const args = image.buildImageArgs({ cwd: d });
+    assert.ok(args.includes("--ask-for-approval"));
+  } finally {
+    // Возможности запомнены в общем экземпляре codex-core. Не вернув их к
+    // умолчанию — в том числе при провале проверки выше — мы протащили бы
+    // --ask-for-approval в остальные тесты image-core.
+    delete process.env.FAKE_HELP;
+    core.capabilities({ force: true });
+  }
+});
+
+await t("1e. неудачная проба возможностей не выдаётся за достоверную", async () => {
+  const d = fresh("caps-broken");
+  // В роли сломанного codex — node: `node exec --help` пишет ошибку в stderr
+  // и выходит с ненулевым кодом. Это работает и на Windows, в отличие от
+  // shebang-заглушки, поэтому тест выполняется на всех платформах.
+  process.env.CODEX_BIN = process.execPath;
+  process.env.CLAUDE_PLUGIN_DATA = path.join(d, "data");
+  const core = await import(`${ROOT_URL}/scripts/codex-core.mjs`);
+  try {
+    const caps = core.capabilities({ force: true });
+    assert.equal(caps.probed, false, "непустой stderr принят за прочитанный help");
+    // Проба не удалась — базовые флаги остаются включёнными, иначе buildArgs
+    // выродится в ["exec", "-"] и Codex уйдёт работать в каталог процесса.
+    for (const f of ["sandbox", "cd", "skipGitRepoCheck", "image"]) {
+      assert.equal(caps[f], true, `${f} выключен после неудачной пробы`);
+    }
+    const args = core.buildArgs({ mode: "delegate", cwd: d });
+    assert.ok(args.includes("--cd"), "--cd потерян");
+    assert.ok(args.includes("--sandbox"), "--sandbox потерян");
+    assert.ok(
+      !fs.existsSync(path.join(d, "data", "exec-caps.json")),
+      "неудачная проба записана на диск и переживёт перезапуск"
+    );
+  } finally {
+    core.capabilities({ force: true });
+  }
 });
 
 // ───────────────────────────────── 2. Терминальные статусы фоновых задач
