@@ -25,7 +25,7 @@ import {
   buildPrompt,
 } from "./codex-core.mjs";
 import { appServerReviewTarget } from "./app-server.mjs";
-import { describe, askedLine } from "./codex-events.mjs";
+import { normalize, askedLine } from "./codex-events.mjs";
 import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
 import { readChat, writeChat, listChats, deleteChat, withChatLock, isValidSlug } from "./chat-store.mjs";
 import { readPrefs, writePrefs } from "./prefs.mjs";
@@ -263,9 +263,16 @@ ${answer}`;
 
 // -------------------------------------------------------------------- вызовы
 
+// Размышления и план модель шлёт потоком, обновляя один и тот же пункт по
+// многу раз — их можно схлопывать. Всё остальное — запуски команд, вызовы
+// инструментов, правки файлов, поиск, сообщения и отказы — это шаги, каждый
+// из которых случился ровно один раз, и терять их нельзя.
+const NOISY_KINDS = new Set(["reasoning", "todo"]);
+
 const notifier = (ctx) => (e) => {
-  const line = describe(e);
-  if (line) ctx?.notify?.(line);
+  const n = normalize(e);
+  if (!n?.title) return;
+  ctx?.notify?.(n.title, { keep: !NOISY_KINDS.has(n.kind) });
 };
 
 function applyDefaults(args, cwd) {
