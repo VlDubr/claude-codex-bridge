@@ -29,6 +29,11 @@ hands.
 
 Two more commands and a readiness check: [Installation](#installation).
 
+<sub>A Claude Code plugin, not a separate workspace to run alongside it — and
+the only one where the traffic goes both ways: Codex can call Claude back and
+reach your MCP servers through it. Checked against the alternatives on
+2026-08-28.</sub>
+
 ---
 
 ## What it's for
