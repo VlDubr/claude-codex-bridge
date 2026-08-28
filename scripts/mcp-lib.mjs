@@ -14,6 +14,11 @@ const PROTOCOL = SUPPORTED[0];
 // а поток уведомлений в клиенте — тоже ресурс.
 const PROGRESS_MIN_INTERVAL_MS = 250;
 
+// Очередь существенных шагов. Ограничение нужно на случай, когда модель
+// работает быстрее, чем клиент успевает получать: лента отстаёт, и держать
+// весь хвост бессмысленно — старые шаги к тому времени уже неинтересны.
+const PROGRESS_QUEUE_MAX = 32;
+
 // Предел на одно входящее сообщение. Промпты и дифы идут наружу, а не внутрь,
 // поэтому запас здесь избыточен и служит только защитой от разрастания памяти.
 const MAX_LINE_BYTES = 16 * 1024 * 1024;
@@ -60,26 +65,49 @@ export function serve({ name, version = "0.1.0", tools, handle }) {
       });
     };
 
+    // Существенные шаги ждут очереди, а не вытесняют друг друга: пропавший
+    // вызов инструмента делает ленту непонятной — видно результат, но не
+    // видно, откуда он взялся. Схлопываются только те шаги, которые приходят
+    // потоком и повторяются: там действительно важен последний.
+    const queue = [];
+
+    const flush = () => {
+      timer = null;
+      if (closed) return;
+      let next = null;
+      if (queue.length) next = queue.shift();
+      else if (pending) {
+        next = pending;
+        pending = null;
+      }
+      if (next) emit(next);
+      if (queue.length || pending) arm();
+    };
+
+    const arm = () => {
+      if (timer || closed) return;
+      timer = setTimeout(flush, Math.max(0, PROGRESS_MIN_INTERVAL_MS - (Date.now() - lastAt)));
+    };
+
     return {
-      notify(message) {
+      notify(message, { keep = false } = {}) {
         if (closed || token === undefined || token === null || !message) return;
         if (!progressEnabled()) return;
-        const wait = PROGRESS_MIN_INTERVAL_MS - (Date.now() - lastAt);
-        if (wait <= 0) return emit(message);
-        pending = message; // в пачке важен последний шаг, а не каждый промежуточный
-        if (!timer) {
-          timer = setTimeout(() => {
-            timer = null;
-            if (!closed && pending) emit(pending);
-            pending = null;
-          }, wait);
+        if (keep) {
+          if (queue.length >= PROGRESS_QUEUE_MAX) queue.shift();
+          queue.push(message);
+        } else {
+          pending = message;
         }
+        if (!timer && Date.now() - lastAt >= PROGRESS_MIN_INTERVAL_MS) return flush();
+        arm();
       },
       close() {
         closed = true;
         if (timer) clearTimeout(timer);
         timer = null;
         pending = null;
+        queue.length = 0;
       },
     };
   }

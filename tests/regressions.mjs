@@ -1257,6 +1257,49 @@ await t("19. followJob отдаёт события по мере появлен�
 
 // ───────────────────────────────── 20. Прогресс и отмена в MCP-транспорте
 
+/** Сервер, шлющий пачку шагов без пауз: часть существенных, часть схлопываемых. */
+function burstServer(dir) {
+  const p = path.join(dir, "burst.mjs");
+  fs.writeFileSync(
+    p,
+    `import { serve, text } from ${JSON.stringify(`${ROOT_URL}/scripts/mcp-lib.mjs`)};
+serve({
+  name: "burst",
+  tools: [{ name: "work", description: "d", inputSchema: { type: "object", properties: {} } }],
+  handle: async (name, args, ctx) => {
+    // Без пауз: всё попадает в один интервал троттлинга.
+    for (let i = 0; i < 5; i++) {
+      ctx.notify("шум " + i);
+      ctx.notify("шаг " + i, { keep: true });
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+    return text("DONE");
+  },
+});
+`
+  );
+  return p;
+}
+
+await t("20d. существенные шаги не вытесняют друг друга в пачке", async () => {
+  const d = fresh("progress-burst");
+  const out = await talk(burstServer(d), [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "work", arguments: {}, _meta: { progressToken: "tok" } } },
+  ]);
+  const msgs = out.filter((m) => m.method === "notifications/progress").map((n) => n.params.message);
+
+  for (let i = 0; i < 5; i++) {
+    assert.ok(msgs.includes(`шаг ${i}`), `существенный шаг ${i} потерян: ${JSON.stringify(msgs)}`);
+  }
+  // Схлопываемые именно схлопываются, иначе троттлинг перестал работать вовсе.
+  const noise = msgs.filter((m) => m.startsWith("шум "));
+  assert.ok(noise.length <= 2, `схлопываемые шаги не схлопнулись: ${JSON.stringify(noise)}`);
+
+  const seq = out.filter((m) => m.method === "notifications/progress").map((n) => n.params.progress);
+  assert.deepEqual(seq, [...seq].sort((a, b) => a - b), `progress не монотонен: ${seq}`);
+});
+
 function progressServer(dir) {
   const p = path.join(dir, "srv.mjs");
   fs.writeFileSync(
