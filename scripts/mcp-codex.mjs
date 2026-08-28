@@ -225,10 +225,16 @@ const REASONING_MAX_CHARS = 700;
  * Ход работы модели в читаемом виде: одна строка на шаг, а для сводок
  * размышлений — их текст. Полный журнал остаётся на диске: в ответ он не идёт.
  */
-function renderTrail(entries, { detail = false } = {}) {
+function renderTrail(entries, { detail = false, asked = null } = {}) {
   const lines = [];
   let budget = TRAIL_MAX_CHARS;
   let prev = null;
+  // Лента начинается с вопроса: без него видно, чем модель занята, но не
+  // видно задачи, и читателю остаётся угадывать её по действиям.
+  if (asked) {
+    lines.push(`  · ${asked}`);
+    budget -= asked.length;
+  }
   for (const e of entries) {
     if (e.title === prev) continue; // item.updated приходит пачками
     prev = e.title;
@@ -251,8 +257,8 @@ function renderTrail(entries, { detail = false } = {}) {
 }
 
 /** Ответ модели вместе с тем, как она к нему шла. */
-function renderRun(jobId, answer, { detail = true } = {}) {
-  const trail = renderTrail(jobTrail(jobId, { limit: 60 }), { detail });
+function renderRun(jobId, answer, { detail = true, asked = null } = {}) {
+  const trail = renderTrail(jobTrail(jobId, { limit: 60 }), { detail, asked });
   return (trail ? `${U().trail_header}
 ${trail}
 
@@ -330,12 +336,12 @@ async function dispatchTool(name, args, ctx = {}) {
         // Работа не перезапускается: тот же процесс продолжает идти в фоне.
         return text(
           `${U().timed_out(Math.round(waitMs / 1000), r.job.id)}\n\n` +
-            `${renderTrail(jobTrail(r.job.id, { limit: 20 }))}\n\n` +
+            `${renderTrail(jobTrail(r.job.id, { limit: 20 }), { asked })}\n\n` +
             U().follow_answer
         );
       }
       if (!r.ok) return err(r.error);
-      return text(renderRun(r.job.id, r.output));
+      return text(renderRun(r.job.id, r.output, { asked }));
     }
 
     case "codex_chat": {
@@ -377,7 +383,7 @@ async function dispatchTool(name, args, ctx = {}) {
           if (r.timedOut) {
             return text(
               `${U().chat_timed_out(Math.round(waitMs / 1000), r.job.id, slug)}\n\n` +
-                renderTrail(jobTrail(r.job.id, { limit: 20 }))
+                renderTrail(jobTrail(r.job.id, { limit: 20 }), { asked })
             );
           }
           if (!r.ok) {
@@ -520,7 +526,7 @@ async function dispatchTool(name, args, ctx = {}) {
         const r = await runJob(spec, { waitMs: 480_000, onEvent: notifier(ctx), signal: ctx.signal });
         if (r.aborted) return text(U().cancelled(r.job.id));
         if (r.timedOut) return text(U().review_timed_out(r.job.id));
-        return r.ok ? text(renderRun(r.job.id, r.output)) : err(r.error);
+        return r.ok ? text(renderRun(r.job.id, r.output, { asked })) : err(r.error);
       }
       const job = startJob(spec);
       return text(
@@ -544,12 +550,12 @@ async function dispatchTool(name, args, ctx = {}) {
       if (r.timedOut) {
         return text(
           `${U().timed_out(Math.round(waitMs / 1000), r.job.id)}\n\n` +
-            `${renderTrail(jobTrail(r.job.id, { limit: 20 }))}\n\n` +
+            `${renderTrail(jobTrail(r.job.id, { limit: 20 }), { asked })}\n\n` +
             U().follow_result
         );
       }
       if (!r.ok) return err(r.error);
-      return text(renderRun(r.job.id, r.output));
+      return text(renderRun(r.job.id, r.output, { asked }));
     }
 
     case "codex_models": {
