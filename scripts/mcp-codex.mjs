@@ -25,7 +25,7 @@ import {
   buildPrompt,
 } from "./codex-core.mjs";
 import { appServerReviewTarget } from "./app-server.mjs";
-import { describe } from "./codex-events.mjs";
+import { describe, askedLine } from "./codex-events.mjs";
 import { fetchModels, formatModels, knownModel, validateEffort, EFFORT_LEVELS } from "./models.mjs";
 import { readChat, writeChat, listChats, deleteChat, withChatLock, isValidSlug } from "./chat-store.mjs";
 import { readPrefs, writePrefs } from "./prefs.mjs";
@@ -305,6 +305,11 @@ async function dispatchTool(name, args, ctx = {}) {
     const k = knownModel(args.model);
     if (!k.known) return err(U().unknown_model(args.model, k.available.join(", ")));
   }
+
+  // Лента открывается вопросом, а не первым действием Codex: иначе в клиенте
+  // видно, что модель что-то делает, но не видно, о чём её спросили.
+  const asked = askedLine(args);
+  if (asked) ctx?.notify?.(asked);
 
   switch (name) {
     case "codex_ask": {

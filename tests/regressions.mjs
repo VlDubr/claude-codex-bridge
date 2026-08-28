@@ -242,6 +242,28 @@ await t("1e. неудачная проба возможностей не выд�
   }
 });
 
+await t("1f. лента начинается с вопроса, а не с первого действия модели", async () => {
+  const ev = await import(`${ROOT_URL}/scripts/codex-events.mjs?asked=${Date.now()}`);
+
+  assert.match(ev.askedLine({ question: "почему падает ретрай вебхука" }), /почему падает ретрай вебхука/);
+  // Приоритет полей: у codex_chat вопрос лежит в message, у codex_review — в focus.
+  assert.match(ev.askedLine({ message: "продолжим про кэш" }), /продолжим про кэш/);
+  assert.match(ev.askedLine({ focus: "схема ретраев" }), /схема ретраев/);
+  assert.match(ev.askedLine({ task: "почини падающие тесты" }), /почини падающие тесты/);
+
+  // Переводы строк ломают ленту: одна строка на событие.
+  assert.ok(!/\n/.test(ev.askedLine({ question: "первая строка\nвторая строка" })), "перенос строки попал в ленту");
+
+  // Длинный вопрос обрезается: лента — не место для промпта целиком.
+  const long = ev.askedLine({ question: "я".repeat(400) });
+  assert.ok(long.length < 220, `строка ленты не обрезана: ${long.length}`);
+  assert.match(long, /…$/, "обрезка без многоточия");
+
+  assert.equal(ev.askedLine({}), null, "пустые аргументы дали строку ленты");
+  assert.equal(ev.askedLine({ question: "   " }), null, "пробелы приняты за вопрос");
+  assert.equal(ev.askedLine(undefined), null, "отсутствие аргументов уронило формирование ленты");
+});
+
 // ───────────────────────────────── 2. Терминальные статусы фоновых задач
 
 await tExec("2a. cancel не перезаписывается завершением процесса", async () => {
