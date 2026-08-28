@@ -98,7 +98,7 @@ Long-running calls don't sit behind a blind timeout. Codex streams its activity 
   · thinking: Checking the race on redelivery
 ```
 
-The same trail streams into Claude Code while the call is in flight: Codex's steps show up next to the tool call as they happen, instead of arriving in one lump at the end.
+The plugin emits this trail as `notifications/progress` while the call is still running, so a client that renders them can show the steps as they happen. Claude Code currently collects them into the tool call's output block rather than a live feed, and the model's answer itself arrives in one piece at the end — you can watch what Codex is doing, but you can't read its reply as it is written, and you can't interrupt mid-sentence.
 
 If a synchronous `codex_ask` runs past its wait budget, it doesn't fail and nothing is lost — the very same job keeps running in the same process in the background, and you get its id plus everything the model managed to do so far. Cancelling the call in Claude stops Codex too.
 
