@@ -253,6 +253,22 @@ export function describe(e) {
 }
 
 /** Нормализованные записи потока, в порядке появления. */
+// Поля инструментов, в которых лежит собственно вопрос. Порядок — приоритет:
+// у codex_chat это message, у codex_review — focus, и так далее.
+const ASKED_FIELDS = ["question", "message", "task", "focus"];
+const ASKED_MAX = 160;
+
+/**
+ * Первая строка ленты: о чём вообще спросили. Без неё видно, чем Codex занят,
+ * но не видно задачи — трейл начинается сразу с размышлений, и читатель
+ * догадывается о вопросе по действиям.
+ */
+export function askedLine(args) {
+  const raw = ASKED_FIELDS.map((f) => args?.[f]).find((v) => typeof v === "string" && v.trim());
+  if (!raw) return null;
+  return L().asks(clip(raw.trim().replace(/\s+/g, " "), ASKED_MAX));
+}
+
 export function normalizeStream(raw) {
   const events = Array.isArray(raw) ? raw : parseStream(raw);
   const out = [];

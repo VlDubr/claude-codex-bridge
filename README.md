@@ -92,6 +92,7 @@ Long-running calls don't sit behind a blind timeout. Codex streams its activity 
 ```
 /tandem:progress
 
+  · asks: why can a retried webhook charge the customer twice
   · thinking: Working through the webhook retry scheme
   · running: rg -n retry src/
   · searching the web: idempotency key payment webhook
